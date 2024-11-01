@@ -223,26 +223,29 @@ def handle_grid_orders(symbol, grid_levels, range_percentage, order_quantity, wo
 
                     new_orders.append({'orderId': new_order['orderId'], 'price': new_order_price, 'side': new_side})
 
-            # Check if the grid needs to be reset when price exceeds a certain threshold
+            # Check if the grid needs to be reset based on price movement
+
+            # Gather sell and buy order prices from open orders
             sell_orders = [float(order['price']) for order in open_orders if order['side'] == 'SELL']
             buy_orders = [float(order['price']) for order in open_orders if order['side'] == 'BUY']
 
-            # Determine the boundary prices based on the presence of open orders
-            if sell_orders:
-                lowest_sell_price = min(sell_orders)
-            else:
-                lowest_sell_price = None  # Set to None or handle accordingly
+            # Determine boundary prices based on the presence of open orders
+            lowest_sell_price = min(sell_orders) if sell_orders else None
+            highest_buy_price = max(buy_orders) if buy_orders else None
 
-            if buy_orders:
-                highest_buy_price = max(buy_orders)
-            else:
-                highest_buy_price = None  # Set to None or handle accordingly
-
-            # If the market price exceeds the highest buy price or falls below the lowest sell price
-            if (market_price > float(highest_buy_price) + float(base_spacing)) or (market_price < float(lowest_sell_price) - float(base_spacing)):
-                print("Price exceeded stop-loss threshold. Resetting grid.")
-                reset_grid(symbol, api_key, api_secret)
-                return  # Stop further execution after resetting
+            # Reset condition based on price movement
+            if highest_buy_price is not None and sell_orders == []:
+                # Only buy orders are present, so reset if the market price exceeds the highest buy price by base_spacing
+                if market_price > highest_buy_price + base_spacing:
+                    print("Price exceeded upper threshold for buy orders. Resetting grid.")
+                    reset_grid(symbol, api_key, api_secret)
+                    return
+            elif lowest_sell_price is not None and buy_orders == []:
+                # Only sell orders are present, so reset if the market price falls below the lowest sell price by base_spacing
+                if market_price < lowest_sell_price - base_spacing:
+                    print("Price fell below lower threshold for sell orders. Resetting grid.")
+                    reset_grid(symbol, api_key, api_secret)
+                    return
 
         elif mode == 'long':
 
@@ -732,8 +735,3 @@ def handle_binance_error(error, symbol, api_key, api_secret):
         print(f"Unhandled error ({error_code}): {error_message}. Closing positions and resetting grid as a precaution.")
         close_open_positions(symbol, api_key, api_secret)
         reset_grid(symbol, api_key, api_secret)
-
-
-
-
-
