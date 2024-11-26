@@ -1,5 +1,6 @@
-Settings
-api_credentials
+***Settings***
+
+***api_credentials***
 
 ```api_key```: Binance API key.
 
@@ -7,7 +8,8 @@ api_credentials
 
 ```base_url```: Binance Futures service URL.
 
-crypto_settings
+
+***crypto_settings***
 
 ```symbol```: Cryptocurrency pair to trade.
 
