@@ -1,0 +1,33 @@
+{
+  "api_credentials": {
+    "api_key": "YOUR_API_KEY",
+    "api_secret": "YOUR_API_SECRET",
+    "base_url": "https://fapi.binance.com"
+  },
+  "crypto_settings": {
+    "1000SHIBUSDT": {
+      "symbol": "1000SHIBUSDT",
+      "grid_levels": 6,
+      "order_quantity": 800,
+      "working_type": "CONTRACT_PRICE",
+      "leverage": 75,
+      "margin_type": "CROSS",
+      "range_percentage": 10,
+      "quantity_multiplier": 1,
+      "mode": "neutral",
+      "spacing_percentage": 2
+    },
+    "SXPUSDT": {
+      "symbol": "SXPUSDT",
+      "grid_levels": 5,
+      "order_quantity": 45,
+      "working_type": "CONTRACT_PRICE",
+      "leverage": 75,
+      "margin_type": "CROSS",
+      "range_percentage": 10,
+      "quantity_multiplier": 1,
+      "mode": "neutral",
+      "spacing_percentage": 2
+    }
+  }
+}
