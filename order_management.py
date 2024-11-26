@@ -3,8 +3,19 @@ import time
 import logging
 import json
 import os
-from config import api_key, api_secret, base_url
+import sys
 from binance_futures import get_market_price, cancel_existing_orders, get_open_orders, get_open_positions, create_signature, get_tick_size, place_market_order
+
+# Fetch settings
+def load_config(file_path='config.json'):
+    with open(file_path, 'r') as file:
+        return json.load(file)
+
+config = load_config()
+api_credentials = config.get("api_credentials", {})
+api_key = api_credentials.get("api_key")
+api_secret = api_credentials.get("api_secret")
+base_url = api_credentials.get("base_url")
 
 logger = logging.getLogger('order_management')
 logger.setLevel(logging.INFO)
@@ -78,7 +89,7 @@ def calculate_variable_grid_spacing(level, grid_levels, base_spacing):
     return base_spacing * factor
 
 # Modified handle_grid_orders function for neutral, long, and short modes
-def handle_grid_orders(symbol, grid_levels, range_percentage, order_quantity, working_type, leverage, margin_type, quantity_multiplier, mode, spacing_percentage):
+def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, margin_type, quantity_multiplier, mode, spacing_percentage):
     # Retrieve current market price
     market_price = get_market_price(symbol, api_key, api_secret)
     if market_price is None:
@@ -103,15 +114,15 @@ def handle_grid_orders(symbol, grid_levels, range_percentage, order_quantity, wo
     tolerance = base_spacing * 0.05
 
     # Fetch current open orders from Binance. If any errors occur, the grid will be reset, and open positions will be closed.
-
     open_orders = get_open_orders(symbol, api_key, api_secret)
 
     # Check for error indication in the response
-    if 'Error' in str(open_orders):
+    if open_orders is None:
         print("Error detected in open orders response.")
         reset_grid(symbol, api_key, api_secret)  # Reset grid on error
     else:
-        print(f"Current open orders: {open_orders}")
+        # print(f"Current open orders: {open_orders}") # This is for debugging
+        print("Open orders retrieved.")
 
     # Load previous open orders from file
     previous_orders = load_open_orders_from_file(symbol)
@@ -153,12 +164,18 @@ def handle_grid_orders(symbol, grid_levels, range_percentage, order_quantity, wo
                 sell_price = round_to_tick_size(buy_price + grid_levels * base_spacing, tick_size)
 
                 # Check if a BUY order is already set at the same level (with tolerance)
-                if any(abs(float(order['price']) - buy_price) <= tolerance and order['side'] == 'BUY' for order in open_orders):
+                if open_orders is not None and any(abs(float(order['price']) - buy_price) <= tolerance and order['side'] == 'BUY' for order in open_orders):
                     print(f"Buy order already exists at {buy_price} within tolerance range.")
                     continue
 
                 print(f"Placing BUY order at {buy_price}")
                 buy_order = place_stop_market_order(symbol, 'BUY', order_quantity, buy_price, api_key, api_secret, working_type)
+
+                # Check if buy order was successfully placed
+                if 'orderId' in buy_order:
+                    new_orders.append({'orderId': buy_order['orderId'], 'price': buy_price, 'side': 'BUY', 'type': buy_order['type']})
+                else:
+                    print(f"Error placing BUY order at {buy_price}")
 
                 # Check if a SELL order is already set at the same level (with tolerance)
                 if any(abs(float(order['price']) - sell_price) <= tolerance and order['side'] == 'SELL' for order in open_orders):
@@ -168,8 +185,11 @@ def handle_grid_orders(symbol, grid_levels, range_percentage, order_quantity, wo
                 print(f"Placing SELL order at {sell_price}")
                 sell_order = place_limit_order(symbol, 'SELL', order_quantity, sell_price, api_key, api_secret, 'SHORT', working_type)
 
-                new_orders.append({'orderId': buy_order['orderId'], 'price': buy_price, 'side': 'BUY', 'type': buy_order['type']})
-                new_orders.append({'orderId': sell_order['orderId'], 'price': sell_price, 'side': 'SELL', 'type': sell_order['type']})
+                # Check if sell order was successfully placed
+                if 'orderId' in sell_order:
+                    new_orders.append({'orderId': sell_order['orderId'], 'price': sell_price, 'side': 'SELL', 'type': sell_order['type']})
+                else:
+                    print(f"Error placing SELL order at {sell_price}")
 
         elif mode == 'short':
             # Short mode: grid created below the market price
@@ -185,6 +205,12 @@ def handle_grid_orders(symbol, grid_levels, range_percentage, order_quantity, wo
                 print(f"Placing SELL order at {sell_price}")
                 sell_order = place_stop_market_order(symbol, 'SELL', order_quantity, sell_price, api_key, api_secret, working_type)
 
+                # Check if sell order was successfully placed
+                if 'orderId' in sell_order:
+                    new_orders.append({'orderId': sell_order['orderId'], 'price': sell_price, 'side': 'SELL', 'type': sell_order['type']})
+                else:
+                    print(f"Error placing SELL order at {sell_price}")
+
                 # Check if a BUY order is already set at the same level (with tolerance)
                 if any(abs(float(order['price']) - buy_price) <= tolerance and order['side'] == 'BUY' for order in open_orders):
                     print(f"Buy order already exists at {buy_price} within tolerance range.")
@@ -193,8 +219,11 @@ def handle_grid_orders(symbol, grid_levels, range_percentage, order_quantity, wo
                 print(f"Placing BUY order at {buy_price}")
                 buy_order = place_limit_order(symbol, 'BUY', order_quantity, buy_price, api_key, api_secret, 'LONG', working_type)
 
-                new_orders.append({'orderId': sell_order['orderId'], 'price': sell_price, 'side': 'SELL', 'type': sell_order['type']})
-                new_orders.append({'orderId': buy_order['orderId'], 'price': buy_price, 'side': 'BUY', 'type': buy_order['type']})
+                # Check if buy order was successfully placed
+                if 'orderId' in buy_order:
+                    new_orders.append({'orderId': buy_order['orderId'], 'price': buy_price, 'side': 'BUY', 'type': buy_order['type']})
+                else:
+                    print(f"Error placing BUY order at {buy_price}")
 
     else:
         # Here we handle cases where orders already exist
@@ -223,29 +252,27 @@ def handle_grid_orders(symbol, grid_levels, range_percentage, order_quantity, wo
 
                     new_orders.append({'orderId': new_order['orderId'], 'price': new_order_price, 'side': new_side})
 
-            # Check if the grid needs to be reset based on price movement
-
-            # Gather sell and buy order prices from open orders
+            # Check if the grid needs to be reset when price exceeds a certain threshold
             sell_orders = [float(order['price']) for order in open_orders if order['side'] == 'SELL']
             buy_orders = [float(order['price']) for order in open_orders if order['side'] == 'BUY']
 
-            # Determine boundary prices based on the presence of open orders
+            # Determine boundary prices
             lowest_sell_price = min(sell_orders) if sell_orders else None
             highest_buy_price = max(buy_orders) if buy_orders else None
 
-            # Reset condition based on price movement
-            if highest_buy_price is not None and sell_orders == []:
-                # Only buy orders are present, so reset if the market price exceeds the highest buy price by base_spacing
-                if market_price > highest_buy_price + base_spacing:
-                    print("Price exceeded upper threshold for buy orders. Resetting grid.")
-                    reset_grid(symbol, api_key, api_secret)
-                    return
-            elif lowest_sell_price is not None and buy_orders == []:
-                # Only sell orders are present, so reset if the market price falls below the lowest sell price by base_spacing
-                if market_price < lowest_sell_price - base_spacing:
-                    print("Price fell below lower threshold for sell orders. Resetting grid.")
-                    reset_grid(symbol, api_key, api_secret)
-                    return
+            # Check stop-loss threshold
+            if (sell_orders and not buy_orders) or (buy_orders and not sell_orders):
+                if lowest_sell_price is not None or highest_buy_price is not None:
+                    print(f"Market price: {market_price}, Lowest sell: {lowest_sell_price}, Highest buy: {highest_buy_price}, Base spacing: {base_spacing}")
+
+                    if (lowest_sell_price is not None and market_price < lowest_sell_price - base_spacing * 1.5 - tolerance) or (highest_buy_price is not None and market_price > highest_buy_price + base_spacing * 1.5 + tolerance):
+                        print("Price exceeded stop-loss threshold with tolerance. Resetting grid.")
+                        reset_grid(symbol, api_key, api_secret)
+                        return
+                elif not sell_orders and not buy_orders:
+                    print("No open orders found. Skipping grid reset check.")
+                else:
+                    print("Boundary prices not properly defined. No grid reset performed.")
 
         elif mode == 'long':
 
@@ -586,12 +613,20 @@ def place_limit_order(symbol, side, quantity, price, api_key, api_secret, positi
         # Check if the response is an error
         if 'code' in response_data:
             handle_binance_error(response_data, symbol, api_key, api_secret)
+            return None
+        elif 'orderId' not in response_data:
+            print(f"Warning: Limit order response missing orderId for {symbol}. Triggering grid reset.")
+            logger.warning(f"Limit order response missing orderId for {symbol}. Triggering grid reset.")
+            reset_grid(symbol, api_key, api_secret)  # Reset grid as a precaution
+            return None
+
         return response_data
 
     except Exception as e:
         print(f"Error placing limit order: {e}")
         logger.error(f"Error placing limit order: {e}")
         handle_binance_error({"code": "unknown", "msg": str(e)}, symbol, api_key, api_secret)
+        return None
 
 def place_stop_market_order(symbol, side, quantity, stop_price, api_key, api_secret, working_type):
     endpoint = '/fapi/v1/order'
@@ -601,9 +636,9 @@ def place_stop_market_order(symbol, side, quantity, stop_price, api_key, api_sec
         'side': side,
         'type': 'STOP_MARKET',
         'quantity': round(quantity, 3),
-        'stopPrice': round(stop_price, 7),  # Price level triggering the stop-market order
+        'stopPrice': round(stop_price, 7),
         'timestamp': timestamp,
-        'workingType': working_type  # "CONTRACT_PRICE" or "MARK_PRICE"
+        'workingType': working_type
     }
 
     query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
@@ -621,58 +656,20 @@ def place_stop_market_order(symbol, side, quantity, stop_price, api_key, api_sec
         # Check if the response is an error
         if 'code' in response_data:
             handle_binance_error(response_data, symbol, api_key, api_secret)
+            return None
+        elif 'orderId' not in response_data:
+            print(f"Warning: Stop Market order response missing orderId for {symbol}. Triggering grid reset.")
+            logger.warning(f"Warning: Stop Market order response missing orderId for {symbol}. Triggering grid reset.")
+            reset_grid(symbol, api_key, api_secret)  # Reset grid as a precaution
+            return None
+
         return response_data
 
     except Exception as e:
         print(f"Error placing stop-market order: {e}")
         logger.error(f"Error placing stop-market order: {e}")
         handle_binance_error({"code": "unknown", "msg": str(e)}, symbol, api_key, api_secret)
-
-def close_open_positions(symbol, api_key, api_secret):
-    """
-    Closes all open positions for a given symbol.
-
-    Args:
-        symbol (str): Trading symbol, such as "BTCUSDT".
-        api_key (str): API key.
-        api_secret (str): API secret.
-    """
-    try:
-        # Retrieve open positions
-        positions = get_open_positions(symbol, api_key, api_secret)
-
-        if not positions:
-            return
-
-        for position in positions:
-            if position['positionAmt'] != 0:  # Check if there are open positions
-                if float(position['positionAmt']) > 0:  # If the position is long
-                    close_side = "SELL"
-                else:  # If the position is short
-                    close_side = "BUY"
-
-                # Close the position using a market order
-                close_position(symbol, close_side, abs(float(position['positionAmt'])), api_key, api_secret)
-
-    except Exception as e:
-        print(f"Error closing positions: {e}")
-
-def close_position(symbol, side, quantity, api_key, api_secret):
-    """
-    Places a market order to close the position.
-
-    Args:
-        symbol (str): Trading symbol, such as "BTCUSDT".
-        side (str): "BUY" or "SELL" side to close the position.
-        quantity (float): Amount to close.
-        api_key (str): API key.
-        api_secret (str): API secret.
-    """
-    try:
-        order = place_market_order(symbol, side, quantity, api_key, api_secret)
-        print(f"Placed market order to close position: {order}")
-    except Exception as e:
-        print(f"Error placing market order: {e}")
+        return None
 
 def reset_grid(symbol, api_key, api_secret):
     """
@@ -699,6 +696,73 @@ def reset_grid(symbol, api_key, api_secret):
     # Notify that the grid has been reset
     print("Grid reset, bot will now place new orders in the next loop.")
 
+def close_open_positions(symbol, api_key, api_secret):
+    """
+    Closes all open positions for a given symbol.
+
+    Args:
+        symbol (str): Trading symbol, such as "BTCUSDT".
+        api_key (str): API key.
+        api_secret (str): API secret.
+    """
+    try:
+        # Retrieve open positions
+        positions = get_open_positions(symbol, api_key, api_secret)
+
+        if not positions:
+            print(f"No open positions found for {symbol}.")
+            return
+
+        for position in positions:
+            if position['positionAmt'] != 0:  # Check if there are open positions
+                if float(position['positionAmt']) > 0:  # If the position is long
+                    close_side = "SELL"
+                else:  # If the position is short
+                    close_side = "BUY"
+
+                # Attempt to close the position using a market order
+                success = close_position(symbol, close_side, abs(float(position['positionAmt'])), api_key, api_secret)
+
+                # Tarkistetaan, että sulkeminen onnistui
+                if not success:
+                    print(f"Failed to close position for {symbol}. Initiating grid reset.")
+                    reset_grid(symbol, api_key, api_secret)
+                    return  # Keskeytä, jos positio jäi auki
+
+    except Exception as e:
+        print(f"Error closing positions: {e}")
+        reset_grid(symbol, api_key, api_secret)  # Resetoi varotoimena
+
+
+def close_position(symbol, side, quantity, api_key, api_secret):
+    """
+    Places a market order to close the position.
+
+    Args:
+        symbol (str): Trading symbol, such as "BTCUSDT".
+        side (str): "BUY" or "SELL" side to close the position.
+        quantity (float): Amount to close.
+        api_key (str): API key.
+        api_secret (str): API secret.
+
+    Returns:
+        bool: True if the position was successfully closed, False otherwise.
+    """
+    try:
+        order = place_market_order(symbol, side, quantity, api_key, api_secret)
+        print(f"Placed market order to close position: {order}")
+
+        # Tarkistetaan, että toimeksianto onnistui
+        if 'orderId' in order:
+            return True
+        else:
+            print(f"Order response did not contain 'orderId': {order}")
+            return False
+
+    except Exception as e:
+        print(f"Error placing market order: {e}")
+        return False
+
 def handle_binance_error(error, symbol, api_key, api_secret):
     """
     Handles a Binance error and performs a grid reset or other actions if needed.
@@ -714,6 +778,9 @@ def handle_binance_error(error, symbol, api_key, api_secret):
 
     print(f"Binance API Error: {error_code} - {error_message}")
 
+    # Fetch all symbols from config.py
+    symbols = [settings["symbol"] for settings in crypto_settings.values()]
+
     # Handle different error codes
     if error_code == -1021:  # Timestamp error
         print("Timestamp issue detected. Synchronizing time and resetting grid...")
@@ -721,17 +788,29 @@ def handle_binance_error(error, symbol, api_key, api_secret):
         reset_grid(symbol, api_key, api_secret)
 
     elif error_code == -2019:  # Insufficient margin
-        print("Insufficient margin detected. Closing positions and resetting grid...")
-        close_open_positions(symbol, api_key, api_secret)
-        reset_grid(symbol, api_key, api_secret)
+        message = "Insufficient margin detected. Closing positions and resetting grid for all symbols, then shutting down the bot..."
+        print(message)
+        logger.info(message)
+
+        # Reset all symbols before shutting down
+        for active_symbol in symbols:
+            try:
+                reset_grid(active_symbol, api_key, api_secret)
+            except Exception as e:
+                logger.error(f"Error while resetting grid for {active_symbol}: {e}")
+                print(f"Error while resetting grid for {active_symbol}: {e}")
+
+        sys.exit("Bot stopped due to insufficient margin.")
 
     elif error_code == 400:  # Bad Request
         print("Bad Request error detected. Checking symbol validity and resetting grid if necessary...")
-        close_open_positions(symbol, api_key, api_secret)
         reset_grid(symbol, api_key, api_secret)
+
+    elif error_code == -1008: # Server is currently overloaded with other requests. Please try again in a few minutes.
+        print("Server is currently overloaded with other requests. Please try again in a few minutes.")
+        time.sleep(2)
 
     # Additional common error codes can be added here
     else:
         print(f"Unhandled error ({error_code}): {error_message}. Closing positions and resetting grid as a precaution.")
-        close_open_positions(symbol, api_key, api_secret)
         reset_grid(symbol, api_key, api_secret)
