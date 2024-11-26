@@ -2,7 +2,18 @@ import requests
 import hashlib
 import hmac
 import time
-from config import api_key, api_secret, base_url
+import json
+
+# Fetch settings
+def load_config(file_path='config.json'):
+    with open(file_path, 'r') as file:
+        return json.load(file)
+
+config = load_config()
+api_credentials = config.get("api_credentials", {})
+api_key = api_credentials.get("api_key")
+api_secret = api_credentials.get("api_secret")
+base_url = api_credentials.get("base_url")
 
 def get_server_time(api_key, api_secret):
     """
@@ -80,30 +91,38 @@ def get_open_positions(symbol, api_key, api_secret):
         return None
 
 def get_open_orders(symbol, api_key, api_secret):
-    # Fetch the server timestamp from Binance
-    server_time = get_server_time(api_key, api_secret)
-    if server_time is None:
-        print("Failed to fetch server time.")
-        return None
-
-    # Use the server timestamp in the timestamp parameter
     endpoint = '/fapi/v1/openOrders'
-    params = {'symbol': symbol, 'timestamp': server_time}
+    max_retries=3
+    delay=1
 
-    # Create the signature
-    query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
-    signature = create_signature(query_string, api_secret)
-    params['signature'] = signature
+    for attempt in range(max_retries):
+        # Fetch the server timestamp
+        server_time = get_server_time(api_key, api_secret)
+        if server_time is None:
+            print("Failed to fetch server time.")
+            time.sleep(delay)
+            continue
 
-    headers = {'X-MBX-APIKEY': api_key}
+        # Set parameters with server timestamp
+        params = {'symbol': symbol, 'timestamp': server_time}
+        query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
+        signature = create_signature(query_string, api_secret)
+        params['signature'] = signature
 
-    try:
-        response = requests.get(base_url + endpoint, headers=headers, params=params)
-        response.raise_for_status()  # Check if the response is successful
-        return response.json()
-    except Exception as e:
-        print(f"Error fetching open orders: {e}")
-        return None
+        headers = {'X-MBX-APIKEY': api_key}
+
+        try:
+            # Attempt to fetch open orders
+            response = requests.get(base_url + endpoint, headers=headers, params=params)
+            response.raise_for_status()
+            orders = response.json()
+            return orders if orders else []  # Return an empty list if no open orders found
+        except Exception as e:
+            print(f"Error fetching open orders (attempt {attempt + 1}/{max_retries}): {e}")
+            time.sleep(delay)
+
+    print("Max retries reached. Returning None to indicate an error.")
+    return None  # Return None explicitly if all attempts fail
 
 def cancel_existing_orders(symbol, api_key, api_secret):
     open_orders = get_open_orders(symbol, api_key, api_secret)
