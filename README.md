@@ -31,7 +31,7 @@ leverage, margin_type, and other Binance futures-specific settings.
 ## Setup Instructions
 Configure API keys for Binance in the bot’s environment.
 
-Adjust parameters in ```config.py``` file as needed.
+Adjust parameters in ```config.json``` file as needed. The file contains example runtime settings for two cryptocurrencies. Modify them as desired.
 
 Run the bot ```(main.py)``` on a compatible environment (e.g. ```Python3``` as a prerequisite).
 
