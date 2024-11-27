@@ -6,7 +6,7 @@
 
 ```api_secret```: Binance API secret.
 
-```base_url```: Binance Futures service URL.
+```base_url```: Binance Futures service URL. ```"https://fapi.binance.com"``` for production environment and ```"https://testnet.binancefuture.com"``` for test environment. Note that separate API secrets are required for both test and production environments.
 
 
 ***crypto_settings***
