@@ -139,23 +139,33 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 buy_price = round_to_tick_size(market_price - (level * base_spacing), tick_size)
                 sell_price = round_to_tick_size(market_price + (level * base_spacing), tick_size)
 
+                # Placing BUY orders
                 print(f"Placing BUY order at {buy_price}")
                 buy_order = place_limit_order(symbol, 'BUY', order_quantity, buy_price, api_key, api_secret, 'LONG', working_type)
 
                 # Check if buy order was successfully placed
-                if 'orderId' in buy_order:
+                if buy_order is None:
+                    print(f"Error placing BUY order at {buy_price}. Skipping to the next iteration.")
+                    break  # Stop processing this symbol's grid and exit the loop
+                elif 'orderId' in buy_order:
                     new_orders.append({'orderId': buy_order['orderId'], 'price': buy_price, 'side': 'BUY'})
                 else:
-                    print(f"Error placing BUY order at {buy_price}")
+                    print(f"Error placing BUY order at {buy_price}. Unexpected API response: {buy_order}")
+                    break  # Stop processing this symbol's grid due to an unexpected response
 
+                # Placing SELL orders
                 print(f"Placing SELL order at {sell_price}")
                 sell_order = place_limit_order(symbol, 'SELL', order_quantity, sell_price, api_key, api_secret, 'SHORT', working_type)
 
-                # Check if sell order was successfully placed
-                if 'orderId' in sell_order:
+                # Check if SELL order was successfully placed
+                if sell_order is None:
+                    print(f"Error placing SELL order at {sell_price}. Stopping grid creation for {symbol}.")
+                    break  # Stop processing this symbol's grid
+                elif 'orderId' in sell_order:
                     new_orders.append({'orderId': sell_order['orderId'], 'price': sell_price, 'side': 'SELL'})
                 else:
-                    print(f"Error placing SELL order at {sell_price}")
+                    print(f"Error placing SELL order at {sell_price}. Unexpected API response: {sell_order}")
+                    break  # Stop processing this symbol's grid due to an unexpected response
 
         elif mode == 'long':
             # Long mode: grid created above the market price
@@ -172,10 +182,14 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 buy_order = place_stop_market_order(symbol, 'BUY', order_quantity, buy_price, api_key, api_secret, working_type)
 
                 # Check if buy order was successfully placed
-                if 'orderId' in buy_order:
+                if buy_order is None:
+                    print(f"Error placing BUY order at {buy_price}. Skipping to the next iteration.")
+                    break  # Stop processing this symbol's grid and exit the loop
+                elif 'orderId' in buy_order:
                     new_orders.append({'orderId': buy_order['orderId'], 'price': buy_price, 'side': 'BUY', 'type': buy_order['type']})
                 else:
                     print(f"Error placing BUY order at {buy_price}")
+                    break  # Stop processing this symbol's grid due to an unexpected response
 
                 # Check if a SELL order is already set at the same level (with tolerance)
                 if any(abs(float(order['price']) - sell_price) <= tolerance and order['side'] == 'SELL' for order in open_orders):
@@ -186,10 +200,14 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 sell_order = place_limit_order(symbol, 'SELL', order_quantity, sell_price, api_key, api_secret, 'SHORT', working_type)
 
                 # Check if sell order was successfully placed
-                if 'orderId' in sell_order:
+                if sell_order is None:
+                    print(f"Error placing SELL order at {sell_price}. Stopping grid creation for {symbol}.")
+                    break  # Stop processing this symbol's grid
+                elif 'orderId' in sell_order:
                     new_orders.append({'orderId': sell_order['orderId'], 'price': sell_price, 'side': 'SELL', 'type': sell_order['type']})
                 else:
                     print(f"Error placing SELL order at {sell_price}")
+                    break
 
         elif mode == 'short':
             # Short mode: grid created below the market price
@@ -206,10 +224,14 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 sell_order = place_stop_market_order(symbol, 'SELL', order_quantity, sell_price, api_key, api_secret, working_type)
 
                 # Check if sell order was successfully placed
-                if 'orderId' in sell_order:
+                if sell_order is None:
+                    print(f"Error placing SELL order at {sell_price}. Stopping grid creation for {symbol}.")
+                    break  # Stop processing this symbol's grid
+                elif 'orderId' in sell_order:
                     new_orders.append({'orderId': sell_order['orderId'], 'price': sell_price, 'side': 'SELL', 'type': sell_order['type']})
                 else:
                     print(f"Error placing SELL order at {sell_price}")
+                    break
 
                 # Check if a BUY order is already set at the same level (with tolerance)
                 if any(abs(float(order['price']) - buy_price) <= tolerance and order['side'] == 'BUY' for order in open_orders):
@@ -220,10 +242,14 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 buy_order = place_limit_order(symbol, 'BUY', order_quantity, buy_price, api_key, api_secret, 'LONG', working_type)
 
                 # Check if buy order was successfully placed
-                if 'orderId' in buy_order:
+                if buy_order is None:
+                    print(f"Error placing BUY order at {buy_price}. Skipping to the next iteration.")
+                    break  # Stop processing this symbol's grid and exit the loop
+                elif 'orderId' in buy_order:
                     new_orders.append({'orderId': buy_order['orderId'], 'price': buy_price, 'side': 'BUY', 'type': buy_order['type']})
                 else:
                     print(f"Error placing BUY order at {buy_price}")
+                    break
 
     else:
         # Here we handle cases where orders already exist
@@ -779,6 +805,10 @@ def handle_binance_error(error, symbol, api_key, api_secret):
     print(f"Binance API Error: {error_code} - {error_message}")
 
     # Fetch all symbols from config.py
+    #symbols = [settings["symbol"] for settings in crypto_settings.values()]
+
+    # Fetch all symbols from config.json
+    crypto_settings = config.get("crypto_settings", {})
     symbols = [settings["symbol"] for settings in crypto_settings.values()]
 
     # Handle different error codes
@@ -809,6 +839,12 @@ def handle_binance_error(error, symbol, api_key, api_secret):
     elif error_code == -1008: # Server is currently overloaded with other requests. Please try again in a few minutes.
         print("Server is currently overloaded with other requests. Please try again in a few minutes.")
         time.sleep(2)
+
+    elif error_code == -4164:  # Insufficient notional. Skip the symbol
+        message = "Order's notional must be no smaller than 5 (unless you choose reduce only)."
+        print(f"{symbol} {message}")
+        logger.info(message)
+        return
 
     # Additional common error codes can be added here
     else:
