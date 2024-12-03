@@ -804,9 +804,6 @@ def handle_binance_error(error, symbol, api_key, api_secret):
 
     print(f"Binance API Error: {error_code} - {error_message}")
 
-    # Fetch all symbols from config.py
-    #symbols = [settings["symbol"] for settings in crypto_settings.values()]
-
     # Fetch all symbols from config.json
     crypto_settings = config.get("crypto_settings", {})
     symbols = [settings["symbol"] for settings in crypto_settings.values()]
