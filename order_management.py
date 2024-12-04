@@ -813,6 +813,7 @@ def handle_binance_error(error, symbol, api_key, api_secret):
         print("Timestamp issue detected. Synchronizing time and resetting grid...")
         time.sleep(2)  # Wait a moment before synchronizing time
         reset_grid(symbol, api_key, api_secret)
+        return
 
     elif error_code == -2019:  # Insufficient margin
         message = "Insufficient margin detected. Closing positions and resetting grid for all symbols, then shutting down the bot..."
@@ -832,10 +833,12 @@ def handle_binance_error(error, symbol, api_key, api_secret):
     elif error_code == 400:  # Bad Request
         print("Bad Request error detected. Checking symbol validity and resetting grid if necessary...")
         reset_grid(symbol, api_key, api_secret)
+        return
 
     elif error_code == -1008: # Server is currently overloaded with other requests. Please try again in a few minutes.
         print("Server is currently overloaded with other requests. Please try again in a few minutes.")
         time.sleep(2)
+        return
 
     elif error_code == -4164:  # Insufficient notional. Skip the symbol
         message = "Order's notional must be no smaller than 5 (unless you choose reduce only)."
@@ -847,3 +850,4 @@ def handle_binance_error(error, symbol, api_key, api_secret):
     else:
         print(f"Unhandled error ({error_code}): {error_message}. Closing positions and resetting grid as a precaution.")
         reset_grid(symbol, api_key, api_secret)
+        return
