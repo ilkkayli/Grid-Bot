@@ -831,7 +831,9 @@ def handle_binance_error(error, symbol, api_key, api_secret):
         sys.exit("Bot stopped due to insufficient margin.")
 
     elif error_code == 400:  # Bad Request
-        print("Bad Request error detected. Checking symbol validity and resetting grid if necessary...")
+        message = f"{symbol} Bad Request error detected. Checking symbol validity and resetting grid if necessary..."
+        print(message)
+        logger.info(message)
         reset_grid(symbol, api_key, api_secret)
         return
 
@@ -841,13 +843,15 @@ def handle_binance_error(error, symbol, api_key, api_secret):
         return
 
     elif error_code == -4164:  # Insufficient notional. Skip the symbol
-        message = "Order's notional must be no smaller than 5 (unless you choose reduce only)."
-        print(f"{symbol} {message}")
+        message = f"{symbol} Order's notional must be no smaller than 5 (unless you choose reduce only)."
+        print(message)
         logger.info(message)
         return
 
     # Additional common error codes can be added here
     else:
-        print(f"Unhandled error ({error_code}): {error_message}. Closing positions and resetting grid as a precaution.")
+        message = f"{symbol} Unhandled error ({error_code}): {error_message}. Closing positions and resetting grid as a precaution" 
+        print(message)
+        logger.info(message)
         reset_grid(symbol, api_key, api_secret)
         return
