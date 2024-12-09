@@ -276,7 +276,15 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     print(f"Placing new {new_side} order at {new_order_price} to replace filled {side} order")
                     new_order = place_limit_order(symbol, new_side, order_quantity, new_order_price, api_key, api_secret, 'SHORT' if new_side == 'SELL' else 'LONG', working_type)
 
-                    new_orders.append({'orderId': new_order['orderId'], 'price': new_order_price, 'side': new_side})
+                    # Check if new order was successfully placed
+                    if new_order is None:
+                        print(f"Error placing new {new_side} order at {new_order_price} to replace filled {side} order. Skipping to the next iteration.")
+                        break  # Stop processing this symbol's grid and exit the loop
+                    elif 'orderId' in new_order:
+                        new_orders.append({'orderId': new_order['orderId'], 'price': new_order_price, 'side': new_side})
+                    else:
+                        print(f"Error placing new order at {new_order_price}")
+                        break
 
             # Check if the grid needs to be reset when price exceeds a certain threshold
             sell_orders = [float(order['price']) for order in open_orders if order['side'] == 'SELL']
