@@ -90,6 +90,8 @@ def calculate_variable_grid_spacing(level, grid_levels, base_spacing):
 
 # Modified handle_grid_orders function for neutral, long, and short modes
 def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, margin_type, quantity_multiplier, mode, spacing_percentage):
+    print("-----------------------------")
+    print(f"Symbol: {symbol}")
     # Retrieve current market price
     market_price = get_market_price(symbol, api_key, api_secret)
     if market_price is None:
@@ -312,7 +314,7 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
             # Check if the lowest stop-market BUY order is too far from the market price
             buy_orders = [order for order in open_orders if order['side'] == 'BUY']
-            print(f"Buy orders found: {buy_orders}")
+            print("Open orders found.")
             if buy_orders:
                 # Use the stopPrice field instead of price
                 lowest_buy_order = min(buy_orders, key=lambda x: float(x['stopPrice']))
@@ -327,11 +329,11 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 print("No BUY orders to evaluate for grid reset.")
 
             for previous_order in previous_orders:
-                print(f"Previous order - ID: {previous_order['orderId']}, Price: {previous_order['price']}")
+                # print(f"Previous order - ID: {previous_order['orderId']}, Price: {previous_order['price']}") # Uncomment for debugging
                 matching_order = next((order for order in open_orders if order['orderId'] == previous_order['orderId']), None)
 
                 if matching_order:
-                    print(f"Matching order found: {matching_order}")
+                    # print(f"Matching order found: {matching_order}") # # Uncomment for debugging
                     new_orders.append(previous_order)
                 else:
                     side = previous_order['side']
@@ -392,7 +394,7 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
             # Check if the highest stop-market SELL order is too far from the market price
             sell_orders = [order for order in open_orders if order['side'] == 'SELL']
-            print(f"Sell orders found: {sell_orders}")
+            print("Open orders found.")
             if sell_orders:
                 # Use the stopPrice field instead of price
                 highest_sell_order = max(sell_orders, key=lambda x: float(x['stopPrice']))
@@ -407,11 +409,11 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 print("No SELL orders to evaluate for grid reset.")
 
             for previous_order in previous_orders:
-                print(f"Previous order - ID: {previous_order['orderId']}, Price: {previous_order['price']}")
+                # print(f"Previous order - ID: {previous_order['orderId']}, Price: {previous_order['price']}") # Uncomment for debugging
                 matching_order = next((order for order in open_orders if order['orderId'] == previous_order['orderId']), None)
 
                 if matching_order:
-                    print(f"Matching order found: {matching_order}")
+                    #print(f"Matching order found: {matching_order}") # Uncomment for debugging
                     new_orders.append(previous_order)
                 else:
                     side = previous_order['side']
