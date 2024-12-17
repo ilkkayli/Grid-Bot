@@ -82,8 +82,6 @@ def calculate_variable_grid_spacing(level, base_spacing, progression=1.1, max_sp
 
 # Modified handle_grid_orders function for neutral, long, and short modes
 def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, margin_type, quantity_multiplier, mode, spacing_percentage, progressive_grid):
-    print("-----------------------------")
-    print(f"Symbol: {symbol}")
     # Retrieve current market price
     market_price = get_market_price(symbol, api_key, api_secret)
     if market_price is None:
