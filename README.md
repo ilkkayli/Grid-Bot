@@ -20,7 +20,7 @@ Three Modes: Supports neutral, long, and short modes.
 **Error Handling and Resilience:** Manages errors and API call issues to maintain continuous operation, including insufficient margin, timestamp discrepancies etc.
 
 ## Configuration
-The bot allows custom configuration through a dictionary in config.py file for each trading pair. Key parameters include:
+The bot allows custom configuration through a dictionary in ```config.json``` file for each trading pair. Key parameters include:
 ```
 grid_levels: Number of grid levels.
 base_order_quantity: Quantity per order.
