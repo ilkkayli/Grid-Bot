@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import time
 import json
+from logging_config import logger
 
 # Fetch settings
 def load_config(file_path='config.json'):
@@ -218,6 +219,93 @@ def cancel_order(symbol, order_id, api_key, api_secret):
 
     return response.json()
 
+def place_limit_order(symbol, side, quantity, price, api_key, api_secret, position_side, working_type):
+    endpoint = '/fapi/v1/order'
+    timestamp = int(time.time() * 1000)
+    params = {
+        'symbol': symbol,
+        'side': side,
+        'type': 'LIMIT',
+        'quantity': round(quantity, 3),
+        'price': round(price, 7),
+        'timeInForce': 'GTC',
+        'timestamp': timestamp,
+        'workingType': working_type
+    }
+
+    query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
+    signature = create_signature(query_string, api_secret)
+    params['signature'] = signature
+
+    headers = {'X-MBX-APIKEY': api_key}
+
+    try:
+        response = requests.post(base_url + endpoint, headers=headers, data=params)
+        response_data = response.json()
+        print(f"Limit order response: {response_data}")
+        logger.info(f"Limit order response: {response_data}")
+
+        # Check if the response is an error
+        if 'code' in response_data:
+            handle_binance_error(response_data, symbol, api_key, api_secret)
+            return None
+        elif 'orderId' not in response_data:
+            print(f"Warning: Limit order response missing orderId for {symbol}. Triggering grid reset.")
+            logger.warning(f"Limit order response missing orderId for {symbol}. Triggering grid reset.")
+            reset_grid(symbol, api_key, api_secret)  # Reset grid as a precaution
+            return None
+
+        return response_data
+
+    except Exception as e:
+        print(f"Error placing limit order: {e}")
+        logger.error(f"Error placing limit order: {e}")
+        handle_binance_error({"code": "unknown", "msg": str(e)}, symbol, api_key, api_secret)
+        return None
+
+def place_stop_market_order(symbol, side, quantity, stop_price, api_key, api_secret, working_type):
+    endpoint = '/fapi/v1/order'
+    timestamp = int(time.time() * 1000)
+    params = {
+        'symbol': symbol,
+        'side': side,
+        'type': 'STOP_MARKET',
+        'quantity': round(quantity, 3),
+        'stopPrice': round(stop_price, 7),
+        'timestamp': timestamp,
+        'workingType': working_type
+    }
+
+    query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
+    signature = create_signature(query_string, api_secret)
+    params['signature'] = signature
+
+    headers = {'X-MBX-APIKEY': api_key}
+
+    try:
+        response = requests.post(base_url + endpoint, headers=headers, data=params)
+        response_data = response.json()
+        print(f"Stop Market order response: {response_data}")
+        logger.info(f"Stop Market order response: {response_data}")
+
+        # Check if the response is an error
+        if 'code' in response_data:
+            handle_binance_error(response_data, symbol, api_key, api_secret)
+            return None
+        elif 'orderId' not in response_data:
+            print(f"Warning: Stop Market order response missing orderId for {symbol}. Triggering grid reset.")
+            logger.warning(f"Warning: Stop Market order response missing orderId for {symbol}. Triggering grid reset.")
+            reset_grid(symbol, api_key, api_secret)  # Reset grid as a precaution
+            return None
+
+        return response_data
+
+    except Exception as e:
+        print(f"Error placing stop-market order: {e}")
+        logger.error(f"Error placing stop-market order: {e}")
+        handle_binance_error({"code": "unknown", "msg": str(e)}, symbol, api_key, api_secret)
+        return None
+
 def place_market_order(symbol, side, quantity, api_key, api_secret):
     """
     Places a market order to close a position.
@@ -259,4 +347,120 @@ def place_market_order(symbol, side, quantity, api_key, api_secret):
         return response.json()
     except Exception as e:
         print(f"Error placing market order: {e}")
+        return None
+
+def close_open_positions(symbol, api_key, api_secret):
+    """
+    Closes all open positions for a given symbol.
+
+    Args:
+        symbol (str): Trading symbol, such as "BTCUSDT".
+        api_key (str): API key.
+        api_secret (str): API secret.
+    """
+    try:
+        # Retrieve open positions
+        positions = get_open_positions(symbol, api_key, api_secret)
+
+        if not positions:
+            print(f"No open positions found for {symbol}.")
+            return
+
+        for position in positions:
+            if position['positionAmt'] != 0:  # Check if there are open positions
+                if float(position['positionAmt']) > 0:  # If the position is long
+                    close_side = "SELL"
+                else:  # If the position is short
+                    close_side = "BUY"
+
+                # Attempt to close the position using a market order
+                success = close_position(symbol, close_side, abs(float(position['positionAmt'])), api_key, api_secret)
+
+                # Check position closing
+                if not success:
+                    print(f"Failed to close position for {symbol}. Initiating grid reset.")
+                    reset_grid(symbol, api_key, api_secret)
+                    return  # Cancel if position still open
+                else:
+                    print(f"Position closed for {symbol} successfully.")
+                    logger.info(f"Position closed for {symbol} successfully.")
+
+    except Exception as e:
+        print(f"Error closing positions: {e}")
+        reset_grid(symbol, api_key, api_secret)  # Reset as precaution
+
+def close_position(symbol, side, quantity, api_key, api_secret):
+    """
+    Places a market order to close the position.
+
+    Args:
+        symbol (str): Trading symbol, such as "BTCUSDT".
+        side (str): "BUY" or "SELL" side to close the position.
+        quantity (float): Amount to close.
+        api_key (str): API key.
+        api_secret (str): API secret.
+
+    Returns:
+        bool: True if the position was successfully closed, False otherwise.
+    """
+    try:
+        order = place_market_order(symbol, side, quantity, api_key, api_secret)
+        print(f"Placed market order to close position: {order}")
+
+        # Tarkistetaan, että toimeksianto onnistui
+        if 'orderId' in order:
+            return True
+        else:
+            print(f"Order response did not contain 'orderId': {order}")
+            return False
+
+    except Exception as e:
+        print(f"Error placing market order: {e}")
+        logger.error(f"Error placing market order: {e}")
+        return False
+
+def set_leverage_if_needed(symbol, leverage, api_key, api_secret):
+    """
+    Set leverage for the given symbol if needed.
+
+    Args:
+        symbol (str): Trading symbol, such as "BTCUSDT".
+        leverage (int): 1-125 Depending on the symbol. Please check the maximum leverage at https://www.binance.com/en/futures/
+        timestamp (str): Timestamp in milliseconds
+        signature (str): Signature in sha256 encoded.
+        api_key (str): API key.
+        api_secret (str): API secret.
+    """
+
+    headers = {"X-MBX-APIKEY": api_key}
+
+    # Get current timestamp in milliseconds
+    timestamp = get_server_time(api_key, api_secret)
+
+    query_string = f"symbol={symbol}&leverage={leverage}&timestamp={timestamp}"
+
+    # Create the signature
+    signature = create_signature(query_string, api_secret)
+
+    # Create params dictionary for the request
+    params = {
+        "symbol": symbol,
+        "leverage": leverage,
+        "timestamp": timestamp,
+        "signature": signature
+    }
+
+    try:
+        response = requests.post(base_url, headers=headers, params=params)
+        response.raise_for_status()
+        result = response.json()
+        print(f"Leverage for {symbol} set to {leverage}x successfully.")
+        return result
+    except requests.exceptions.HTTPError as e:
+        print(f"Failed to set leverage for {symbol}: {e.response.status_code} - {e.response.text}")
+        logger.error(f"Failed to set leverage for {symbol}.")
+        return None
+    except Exception as e:
+        print(f"Unhandled error while setting leverage for {symbol}: {e}")
+        logger.error(f"Unhandled error while setting leverage for {symbol}.")
         return None
