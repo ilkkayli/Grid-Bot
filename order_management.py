@@ -1,10 +1,9 @@
-import requests
 import time
-import logging
 import json
 import os
 import sys
-from binance_futures import get_market_price, cancel_existing_orders, get_open_orders, get_open_positions, create_signature, get_tick_size, place_market_order
+from binance_futures import get_market_price, cancel_existing_orders, get_open_orders, get_open_positions, get_tick_size, place_market_order, place_limit_order, place_stop_market_order, close_open_positions, close_position
+from logging_config import logger
 
 # Fetch settings
 def load_config(file_path='config.json'):
@@ -16,14 +15,6 @@ api_credentials = config.get("api_credentials", {})
 api_key = api_credentials.get("api_key")
 api_secret = api_credentials.get("api_secret")
 base_url = api_credentials.get("base_url")
-
-logger = logging.getLogger('order_management')
-logger.setLevel(logging.INFO)
-fh = logging.FileHandler('order_management.log')
-fh.setLevel(logging.INFO)
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-fh.setFormatter(formatter)
-logger.addHandler(fh)
 
 ORDERS_FILE_TEMPLATE = "{}_open_orders.json"
 
@@ -78,18 +69,19 @@ def load_open_orders_from_file(symbol):
         print(f"Error reading {filename}: {e}")
         return []
 
-def round_to_tick_size(price, tick_size):
-    """Rounds the price to the nearest tick size."""
-    return round(price / tick_size) * tick_size
+def round_to_tick_size(price, tick_size, offset=0.000001):
+    """Rounds the price to the nearest tick size with a small offset to avoid repeated prices."""
+    return round((price + offset) / tick_size) * tick_size
 
-def calculate_variable_grid_spacing(level, grid_levels, base_spacing):
-    """Calculates grid spacing where the spacing decreases towards the center."""
-    mid_level = grid_levels // 2
-    factor = 1 / (1 + abs(level - mid_level) / mid_level)
-    return base_spacing * factor
+def calculate_variable_grid_spacing(level, base_spacing, progression=1.1, max_spacing=None):
+    """Lasketaan progressiivinen ruudukon väli käyttäen kerrointa, rajoitettu max_spacing-arvoon."""
+    spacing = base_spacing * (progression ** (level - 1))
+    if max_spacing is not None:
+        return min(spacing, max_spacing)
+    return spacing
 
 # Modified handle_grid_orders function for neutral, long, and short modes
-def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, margin_type, quantity_multiplier, mode, spacing_percentage):
+def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, margin_type, quantity_multiplier, mode, spacing_percentage, progressive_grid):
     print("-----------------------------")
     print(f"Symbol: {symbol}")
     # Retrieve current market price
@@ -131,15 +123,37 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
     new_orders = []
 
+    calculate_spacing = (
+    lambda level: calculate_variable_grid_spacing(level, base_spacing)
+    if progressive_grid
+    else lambda level: base_spacing
+    )
+
     if not open_orders:
         # If there are no open orders, create new grid orders depending on mode
         print(f"Mode: {mode}")
 
         if mode == 'neutral':
             # Neutral mode: orders on both sides of the market price
+            print(f"Grid progression:  {progressive_grid}")
             for level in range(1, grid_levels + 1):
-                buy_price = round_to_tick_size(market_price - (level * base_spacing), tick_size)
-                sell_price = round_to_tick_size(market_price + (level * base_spacing), tick_size)
+                print(f"Current Level: {level}")
+
+                if progressive_grid == True:
+                    # Calculate variable spacing if progressive_grid flag is True
+                    buy_spacing = calculate_spacing(level)
+                    sell_spacing = calculate_spacing(level)
+                    print(f"Variable Spacing for BUY: {buy_spacing}, SELL: {sell_spacing}")
+                else:
+                    # Use fixed spacing if progressive_grid flag is False
+                    buy_spacing = sell_spacing = base_spacing
+                    print(f"Fixed Spacing: {base_spacing}")
+
+                buy_price = round_to_tick_size(market_price - (level * buy_spacing), tick_size)
+                sell_price = round_to_tick_size(market_price + (level * sell_spacing), tick_size)
+
+                print(f"Market Price: {market_price}, Buy Price: {buy_price}, Sell Price: {sell_price}")
+                print(f"TICK SIZE: {tick_size}")
 
                 # Placing BUY orders
                 print(f"Placing BUY order at {buy_price}")
@@ -151,6 +165,7 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     break  # Stop processing this symbol's grid and exit the loop
                 elif 'orderId' in buy_order:
                     new_orders.append({'orderId': buy_order['orderId'], 'price': buy_price, 'side': 'BUY'})
+                    print(f"BUY Order Placed Successfully: {buy_order['orderId']}")
                 else:
                     print(f"Error placing BUY order at {buy_price}. Unexpected API response: {buy_order}")
                     break  # Stop processing this symbol's grid due to an unexpected response
@@ -165,6 +180,7 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     break  # Stop processing this symbol's grid
                 elif 'orderId' in sell_order:
                     new_orders.append({'orderId': sell_order['orderId'], 'price': sell_price, 'side': 'SELL'})
+                    print(f"SELL Order Placed Successfully: {sell_order['orderId']}")
                 else:
                     print(f"Error placing SELL order at {sell_price}. Unexpected API response: {sell_order}")
                     break  # Stop processing this symbol's grid due to an unexpected response
@@ -261,26 +277,47 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 matching_order = next((order for order in open_orders if order['orderId'] == previous_order['orderId']), None)
 
                 if matching_order:
+                    # Order still exists, add it to new orders
                     new_orders.append(previous_order)
                 else:
+                    # Order filled, calculate replacement order
                     side = previous_order['side']
                     new_side = 'SELL' if side == 'BUY' else 'BUY'
+
+                    # Calculate the level of the filled order relative to market price
                     level = abs(previous_order['price'] - market_price) // base_spacing
-                    new_spacing = calculate_variable_grid_spacing(level, grid_levels, base_spacing)
-                    price = previous_order['price'] - new_spacing if side == 'SELL' else previous_order['price'] + new_spacing
+
+                    # Calculate spacing for the replacement order
+                    if progressive_grid:
+                        new_spacing = calculate_variable_grid_spacing(level, base_spacing)
+                    else:
+                        new_spacing = base_spacing
+
+                    price = (
+                        previous_order['price'] - new_spacing if side == 'SELL'
+                        else previous_order['price'] + new_spacing
+                    )
                     new_order_price = round_to_tick_size(price, tick_size)
 
-                    # Check if an order has already been placed at this level (within tolerance)
-                    if any(abs(float(order['price']) - new_order_price) <= tolerance and order['side'] == new_side for order in open_orders):
+                    # Check if an order already exists at this level within tolerance
+                    if any(
+                        abs(float(order['price']) - new_order_price) <= tolerance
+                        and order['side'] == new_side
+                        for order in open_orders
+                    ):
                         print(f"{new_side} order already exists at {new_order_price} within tolerance range.")
                         continue
 
+                    # Place new order to replace the filled order
                     print(f"Placing new {new_side} order at {new_order_price} to replace filled {side} order")
-                    new_order = place_limit_order(symbol, new_side, order_quantity, new_order_price, api_key, api_secret, 'SHORT' if new_side == 'SELL' else 'LONG', working_type)
+                    new_order = place_limit_order(
+                        symbol, new_side, order_quantity, new_order_price, api_key, api_secret,
+                        'SHORT' if new_side == 'SELL' else 'LONG', working_type
+                    )
 
-                    # Check if new order was successfully placed
+                    # Check if the new order was successfully placed
                     if new_order is None:
-                        print(f"Error placing new {new_side} order at {new_order_price} to replace filled {side} order. Skipping to the next iteration.")
+                        print(f"Error placing new {new_side} order at {new_order_price}. Skipping to the next iteration.")
                         break  # Stop processing this symbol's grid and exit the loop
                     elif 'orderId' in new_order:
                         new_orders.append({'orderId': new_order['orderId'], 'price': new_order_price, 'side': new_side})
@@ -301,7 +338,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 if lowest_sell_price is not None or highest_buy_price is not None:
                     print(f"Market price: {market_price}, Lowest sell: {lowest_sell_price}, Highest buy: {highest_buy_price}, Base spacing: {base_spacing}")
 
-                    if (lowest_sell_price is not None and market_price < lowest_sell_price - base_spacing * 1.5 - tolerance) or (highest_buy_price is not None and market_price > highest_buy_price + base_spacing * 1.5 + tolerance):
+                    if (lowest_sell_price is not None and market_price < lowest_sell_price - base_spacing * 1.5 - tolerance) or \
+                       (highest_buy_price is not None and market_price > highest_buy_price + base_spacing * 1.5 + tolerance):
                         print("Price exceeded stop-loss threshold with tolerance. Resetting grid.")
                         reset_grid(symbol, api_key, api_secret)
                         return
@@ -309,6 +347,7 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     print("No open orders found. Skipping grid reset check.")
                 else:
                     print("Boundary prices not properly defined. No grid reset performed.")
+
 
         elif mode == 'long':
 
@@ -620,92 +659,6 @@ def determine_order_type_short(market_price, previous_order_price, direction):
     else:
         raise ValueError("Invalid direction. Must be 'BUY' or 'SELL'.")
 
-def place_limit_order(symbol, side, quantity, price, api_key, api_secret, position_side, working_type):
-    endpoint = '/fapi/v1/order'
-    timestamp = int(time.time() * 1000)
-    params = {
-        'symbol': symbol,
-        'side': side,
-        'type': 'LIMIT',
-        'quantity': round(quantity, 3),
-        'price': round(price, 7),
-        'timeInForce': 'GTC',
-        'timestamp': timestamp,
-        'workingType': working_type
-    }
-
-    query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
-    signature = create_signature(query_string, api_secret)
-    params['signature'] = signature
-
-    headers = {'X-MBX-APIKEY': api_key}
-
-    try:
-        response = requests.post(base_url + endpoint, headers=headers, data=params)
-        response_data = response.json()
-        print(f"Limit order response: {response_data}")
-        logger.info(f"Limit order response: {response_data}")
-
-        # Check if the response is an error
-        if 'code' in response_data:
-            handle_binance_error(response_data, symbol, api_key, api_secret)
-            return None
-        elif 'orderId' not in response_data:
-            print(f"Warning: Limit order response missing orderId for {symbol}. Triggering grid reset.")
-            logger.warning(f"Limit order response missing orderId for {symbol}. Triggering grid reset.")
-            reset_grid(symbol, api_key, api_secret)  # Reset grid as a precaution
-            return None
-
-        return response_data
-
-    except Exception as e:
-        print(f"Error placing limit order: {e}")
-        logger.error(f"Error placing limit order: {e}")
-        handle_binance_error({"code": "unknown", "msg": str(e)}, symbol, api_key, api_secret)
-        return None
-
-def place_stop_market_order(symbol, side, quantity, stop_price, api_key, api_secret, working_type):
-    endpoint = '/fapi/v1/order'
-    timestamp = int(time.time() * 1000)
-    params = {
-        'symbol': symbol,
-        'side': side,
-        'type': 'STOP_MARKET',
-        'quantity': round(quantity, 3),
-        'stopPrice': round(stop_price, 7),
-        'timestamp': timestamp,
-        'workingType': working_type
-    }
-
-    query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
-    signature = create_signature(query_string, api_secret)
-    params['signature'] = signature
-
-    headers = {'X-MBX-APIKEY': api_key}
-
-    try:
-        response = requests.post(base_url + endpoint, headers=headers, data=params)
-        response_data = response.json()
-        print(f"Stop Market order response: {response_data}")
-        logger.info(f"Stop Market order response: {response_data}")
-
-        # Check if the response is an error
-        if 'code' in response_data:
-            handle_binance_error(response_data, symbol, api_key, api_secret)
-            return None
-        elif 'orderId' not in response_data:
-            print(f"Warning: Stop Market order response missing orderId for {symbol}. Triggering grid reset.")
-            logger.warning(f"Warning: Stop Market order response missing orderId for {symbol}. Triggering grid reset.")
-            reset_grid(symbol, api_key, api_secret)  # Reset grid as a precaution
-            return None
-
-        return response_data
-
-    except Exception as e:
-        print(f"Error placing stop-market order: {e}")
-        logger.error(f"Error placing stop-market order: {e}")
-        handle_binance_error({"code": "unknown", "msg": str(e)}, symbol, api_key, api_secret)
-        return None
 
 def reset_grid(symbol, api_key, api_secret):
     """
@@ -731,73 +684,6 @@ def reset_grid(symbol, api_key, api_secret):
 
     # Notify that the grid has been reset
     print("Grid reset, bot will now place new orders in the next loop.")
-
-def close_open_positions(symbol, api_key, api_secret):
-    """
-    Closes all open positions for a given symbol.
-
-    Args:
-        symbol (str): Trading symbol, such as "BTCUSDT".
-        api_key (str): API key.
-        api_secret (str): API secret.
-    """
-    try:
-        # Retrieve open positions
-        positions = get_open_positions(symbol, api_key, api_secret)
-
-        if not positions:
-            print(f"No open positions found for {symbol}.")
-            return
-
-        for position in positions:
-            if position['positionAmt'] != 0:  # Check if there are open positions
-                if float(position['positionAmt']) > 0:  # If the position is long
-                    close_side = "SELL"
-                else:  # If the position is short
-                    close_side = "BUY"
-
-                # Attempt to close the position using a market order
-                success = close_position(symbol, close_side, abs(float(position['positionAmt'])), api_key, api_secret)
-
-                # Tarkistetaan, että sulkeminen onnistui
-                if not success:
-                    print(f"Failed to close position for {symbol}. Initiating grid reset.")
-                    reset_grid(symbol, api_key, api_secret)
-                    return  # Keskeytä, jos positio jäi auki
-
-    except Exception as e:
-        print(f"Error closing positions: {e}")
-        reset_grid(symbol, api_key, api_secret)  # Resetoi varotoimena
-
-
-def close_position(symbol, side, quantity, api_key, api_secret):
-    """
-    Places a market order to close the position.
-
-    Args:
-        symbol (str): Trading symbol, such as "BTCUSDT".
-        side (str): "BUY" or "SELL" side to close the position.
-        quantity (float): Amount to close.
-        api_key (str): API key.
-        api_secret (str): API secret.
-
-    Returns:
-        bool: True if the position was successfully closed, False otherwise.
-    """
-    try:
-        order = place_market_order(symbol, side, quantity, api_key, api_secret)
-        print(f"Placed market order to close position: {order}")
-
-        # Tarkistetaan, että toimeksianto onnistui
-        if 'orderId' in order:
-            return True
-        else:
-            print(f"Order response did not contain 'orderId': {order}")
-            return False
-
-    except Exception as e:
-        print(f"Error placing market order: {e}")
-        return False
 
 def handle_binance_error(error, symbol, api_key, api_secret):
     """
