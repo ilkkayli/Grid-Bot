@@ -27,6 +27,7 @@ base_order_quantity: Quantity per order.
 spacing_percentage: Defines spacing between grid levels, typically as a percentage of market price.
 leverage, margin_type, and other Binance futures-specific settings.
 ```
+If setting the leverage doesn't work for some reason, you can set it manually either through the browser or the Binance app.
 
 ## Setup Instructions
 Configure API keys for Binance in the bot’s environment.
