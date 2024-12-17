@@ -28,3 +28,6 @@
 ```mode```: Bot's operation mode (e.g., long, short, or neutral).
 
 ```spacing_percentage```: Percentage difference between price levels. This represents the gap between consecutive orders as a percentage.
+
+```progressive_grid```: This setting determines whether the grid gaps in neutral mode are fixed ("False") or expanding at the edges ("True").
+
