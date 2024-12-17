@@ -59,6 +59,8 @@ def main():
             spacing_percentage = params.get("spacing_percentage")
             progressive_grid = params.get("progressive_grid", "False").lower() == "true"
 
+            print("-----------------------------")
+            print(f"Symbol: {symbol}")
             # Check and set leverage
             set_leverage_if_needed(symbol, leverage, api_key, api_secret)
 
