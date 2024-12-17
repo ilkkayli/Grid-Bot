@@ -26,7 +26,7 @@
       "margin_type": "CROSS",
       "quantity_multiplier": 1,
       "mode": "neutral",
-      "spacing_percentage": 2
+      "spacing_percentage": 2,
       "progressive_grid" : "True"
     }
   }
