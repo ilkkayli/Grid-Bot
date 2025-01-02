@@ -1,9 +1,21 @@
-import time
 import json
-import os
-import sys
-from binance_futures import get_market_price, cancel_existing_orders, get_open_orders, get_open_positions, get_tick_size, place_market_order, place_limit_order, place_stop_market_order, close_open_positions, close_position
-from logging_config import logger
+from binance_futures import (
+    get_market_price,
+    get_open_orders,
+    get_tick_size,
+    place_limit_order,
+    place_stop_market_order,
+    reset_grid,
+    get_open_positions
+)
+from file_utils import (
+    get_orders_file,
+    load_previous_orders,
+    save_current_orders,
+    clear_orders_file,
+    save_open_orders_to_file,
+    load_open_orders_from_file,
+)
 
 # Fetch settings
 def load_config(file_path='config.json'):
@@ -16,72 +28,19 @@ api_key = api_credentials.get("api_key")
 api_secret = api_credentials.get("api_secret")
 base_url = api_credentials.get("base_url")
 
-ORDERS_FILE_TEMPLATE = "{}_open_orders.json"
-
-def get_orders_file(symbol):
-    """Returns the filename for the specific symbol."""
-    return ORDERS_FILE_TEMPLATE.format(symbol)
-
-def load_previous_orders(symbol):
-    """Loads previous orders from a file for the specific symbol."""
-    filename = get_orders_file(symbol)
-    if os.path.exists(filename):
-        with open(filename, "r") as file:
-            return json.load(file)
-    return []
-
-def save_current_orders(symbol, orders):
-    """Saves current orders to a file for the specific symbol."""
-    filename = get_orders_file(symbol)
-    with open(filename, "w") as file:
-        json.dump(orders, file)
-
-def clear_orders_file(symbol):
-    """Clears the file for the specific symbol when the bot starts."""
-    filename = get_orders_file(symbol)
-    with open(filename, 'w') as file:
-        json.dump([], file)
-    print(f"{filename} cleared.")
-
-def save_open_orders_to_file(symbol, open_orders):
-    """Saves open orders to a file for the specific symbol."""
-    filename = get_orders_file(symbol)
-    try:
-        with open(filename, 'w') as file:
-            json.dump(open_orders, file, indent=4)
-        print(f"Saved open orders to {filename}.")
-    except Exception as e:
-        print(f"Error saving open orders to file: {e}")
-
-def load_open_orders_from_file(symbol):
-    """Reads open orders from the specific symbol's file."""
-    filename = get_orders_file(symbol)
-    try:
-        with open(filename, 'r') as file:
-            return json.load(file)
-    except FileNotFoundError:
-        print(f"{filename} not found. Assuming no previous orders.")
-        return []
-    except json.JSONDecodeError:
-        print(f"Error decoding JSON from {filename}. Assuming no valid orders.")
-        return []
-    except Exception as e:
-        print(f"Error reading {filename}: {e}")
-        return []
-
 def round_to_tick_size(price, tick_size, offset=0.000001):
     """Rounds the price to the nearest tick size with a small offset to avoid repeated prices."""
     return round((price + offset) / tick_size) * tick_size
 
-def calculate_variable_grid_spacing(level, base_spacing, progression=1.1, max_spacing=None):
-    """Lasketaan progressiivinen ruudukon väli käyttäen kerrointa, rajoitettu max_spacing-arvoon."""
-    spacing = base_spacing * (progression ** (level - 1))
+def calculate_variable_grid_spacing(level, base_spacing, grid_progression, max_spacing=None):
+    """Calculate progressive grid spacing using a multiplier, constrained by a max_spacing value."""
+    spacing = base_spacing * (grid_progression ** (level - 1))
     if max_spacing is not None:
         return min(spacing, max_spacing)
     return spacing
 
 # Modified handle_grid_orders function for neutral, long, and short modes
-def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, margin_type, quantity_multiplier, mode, spacing_percentage, progressive_grid):
+def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, margin_type, quantity_multiplier, mode, spacing_percentage, progressive_grid, grid_progression):
     # Retrieve current market price
     market_price = get_market_price(symbol, api_key, api_secret)
     if market_price is None:
@@ -121,12 +80,6 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
     new_orders = []
 
-    calculate_spacing = (
-    lambda level: calculate_variable_grid_spacing(level, base_spacing)
-    if progressive_grid
-    else lambda level: base_spacing
-    )
-
     if not open_orders:
         # If there are no open orders, create new grid orders depending on mode
         print(f"Mode: {mode}")
@@ -139,8 +92,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
                 if progressive_grid == True:
                     # Calculate variable spacing if progressive_grid flag is True
-                    buy_spacing = calculate_spacing(level)
-                    sell_spacing = calculate_spacing(level)
+                    buy_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression)
+                    sell_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression)
                     print(f"Variable Spacing for BUY: {buy_spacing}, SELL: {sell_spacing}")
                 else:
                     # Use fixed spacing if progressive_grid flag is False
@@ -278,6 +231,13 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     # Order still exists, add it to new orders
                     new_orders.append(previous_order)
                 else:
+                     # If not open position then re-adjust the grid
+                    open_positions = get_open_positions(symbol, api_key, api_secret)
+                    if not open_positions:
+                        print("No open positions detected. Resetting grid.")
+                        reset_grid(symbol, api_key, api_secret)
+                        return
+
                     # Order filled, calculate replacement order
                     side = previous_order['side']
                     new_side = 'SELL' if side == 'BUY' else 'BUY'
@@ -287,7 +247,7 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
                     # Calculate spacing for the replacement order
                     if progressive_grid:
-                        new_spacing = calculate_variable_grid_spacing(level, base_spacing)
+                        new_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression)
                     else:
                         new_spacing = base_spacing
 
@@ -620,6 +580,7 @@ def determine_order_type_long(market_price, previous_order_price, direction):
     # If the given direction is neither BUY nor SELL
     else:
         raise ValueError("Invalid direction. Must be 'BUY' or 'SELL'.")
+        return
 
 def determine_order_type_short(market_price, previous_order_price, direction):
     """
@@ -656,96 +617,4 @@ def determine_order_type_short(market_price, previous_order_price, direction):
     # If the given direction is neither BUY nor SELL
     else:
         raise ValueError("Invalid direction. Must be 'BUY' or 'SELL'.")
-
-
-def reset_grid(symbol, api_key, api_secret):
-    """
-    Performs a grid reset:
-    1. Closes all open positions.
-    2. Cancels all buy and sell orders.
-    3. Clears the symbol-specific JSON file.
-    4. Prints a notification of the reset.
-
-    Args:
-        symbol (str): Trading symbol, such as "BTCUSDT".
-        api_key (str): API key.
-        api_secret (str): API secret.
-    """
-    # Close open positions
-    close_open_positions(symbol, api_key, api_secret)
-
-    # Cancel all buy and sell orders
-    cancel_existing_orders(symbol, api_key, api_secret)
-
-    # Clear the JSON file
-    clear_orders_file(f"{symbol}_open_orders.json")  # Use a symbol-specific file
-
-    # Notify that the grid has been reset
-    print("Grid reset, bot will now place new orders in the next loop.")
-
-def handle_binance_error(error, symbol, api_key, api_secret):
-    """
-    Handles a Binance error and performs a grid reset or other actions if needed.
-
-    Args:
-        error (dict): Binance API error containing 'code' and 'msg'.
-        symbol (str): Trading symbol, such as "BTCUSDT".
-        api_key (str): API key.
-        api_secret (str): API secret.
-    """
-    error_code = error.get('code')
-    error_message = error.get('msg')
-
-    print(f"Binance API Error: {error_code} - {error_message}")
-
-    # Fetch all symbols from config.json
-    crypto_settings = config.get("crypto_settings", {})
-    symbols = [settings["symbol"] for settings in crypto_settings.values()]
-
-    # Handle different error codes
-    if error_code == -1021:  # Timestamp error
-        print("Timestamp issue detected. Synchronizing time and resetting grid...")
-        time.sleep(2)  # Wait a moment before synchronizing time
-        reset_grid(symbol, api_key, api_secret)
         return
-
-    elif error_code == -2019:  # Insufficient margin
-        message = "Insufficient margin detected. Closing positions and resetting grid for all symbols, then shutting down the bot..."
-        log_and_print(message)
-
-        # Reset all symbols before shutting down
-        for active_symbol in symbols:
-            try:
-                reset_grid(active_symbol, api_key, api_secret)
-            except Exception as e:
-                logger.error(f"Error while resetting grid for {active_symbol}: {e}")
-                print(f"Error while resetting grid for {active_symbol}: {e}")
-
-        sys.exit("Bot stopped due to insufficient margin.")
-
-    elif error_code == 400:  # Bad Request
-        message = f"{symbol} Bad Request error detected. Checking symbol validity and resetting grid if necessary..."
-        log_and_print(message)
-        reset_grid(symbol, api_key, api_secret)
-        return
-
-    elif error_code == -1008: # Server is currently overloaded with other requests. Please try again in a few minutes.
-        print("Server is currently overloaded with other requests. Please try again in a few minutes.")
-        time.sleep(2)
-        return
-
-    elif error_code == -4164:  # Insufficient notional. Skip the symbol
-        message = f"{symbol} Order's notional must be no smaller than 5 (unless you choose reduce only)."
-        log_and_print(message)
-        return
-
-    # Additional common error codes can be added here
-    else:
-        message = f"{symbol} Unhandled error ({error_code}): {error_message}. Closing positions and resetting grid as a precaution"
-        log_and_print(message)
-        reset_grid(symbol, api_key, api_secret)
-        return
-
-def log_and_print(message):
-    print(message)
-    logger.info(message)
