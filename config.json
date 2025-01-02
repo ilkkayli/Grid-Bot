@@ -15,7 +15,8 @@
       "quantity_multiplier": 1,
       "mode": "neutral",
       "spacing_percentage": 2,
-      "progressive_grid" : "False"
+      "progressive_grid" : "False",
+      "grid_progression" : 1.1
     },
     "SXPUSDT": {
       "symbol": "SXPUSDT",
@@ -27,7 +28,8 @@
       "quantity_multiplier": 1,
       "mode": "neutral",
       "spacing_percentage": 2,
-      "progressive_grid" : "True"
+      "progressive_grid" : "True",
+      "grid_progression" : 1.1
     }
   }
 }
