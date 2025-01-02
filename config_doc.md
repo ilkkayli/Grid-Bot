@@ -31,3 +31,5 @@
 
 ```progressive_grid```: This setting determines whether the grid gaps in neutral mode are fixed ("False") or expanding at the edges ("True").
 
+```grid_progression```: The setting defines the magnitude of the growth in grid spacing for a progressive grid eg. 1.1
+
