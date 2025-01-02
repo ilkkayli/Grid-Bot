@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import time
 import json
+import sys
 from logging_config import logger
 
 # Fetch settings
@@ -260,7 +261,6 @@ def place_limit_order(symbol, side, quantity, price, api_key, api_secret, positi
     except Exception as e:
         print(f"Error placing limit order: {e}")
         logger.error(f"Error placing limit order: {e}")
-        handle_binance_error({"code": "unknown", "msg": str(e)}, symbol, api_key, api_secret)
         return None
 
 def place_stop_market_order(symbol, side, quantity, stop_price, api_key, api_secret, working_type):
@@ -303,7 +303,6 @@ def place_stop_market_order(symbol, side, quantity, stop_price, api_key, api_sec
     except Exception as e:
         print(f"Error placing stop-market order: {e}")
         logger.error(f"Error placing stop-market order: {e}")
-        handle_binance_error({"code": "unknown", "msg": str(e)}, symbol, api_key, api_secret)
         return None
 
 def place_market_order(symbol, side, quantity, api_key, api_secret):
@@ -457,10 +456,103 @@ def set_leverage_if_needed(symbol, leverage, api_key, api_secret):
         print(f"Leverage for {symbol} set to {leverage}x successfully.")
         return result
     except requests.exceptions.HTTPError as e:
-        print(f"Failed to set leverage for {symbol}: {e.response.status_code} - {e.response.text}")
-        logger.error(f"Failed to set leverage for {symbol}.")
+        print(f"Failed to set leverage for {symbol}.")
         return None
     except Exception as e:
         print(f"Unhandled error while setting leverage for {symbol}: {e}")
-        logger.error(f"Unhandled error while setting leverage for {symbol}.")
         return None
+
+def reset_grid(symbol, api_key, api_secret):
+    """
+    Performs a grid reset:
+    1. Closes all open positions.
+    2. Cancels all buy and sell orders.
+    3. Clears the symbol-specific JSON file.
+    4. Prints a notification of the reset.
+
+    Args:
+        symbol (str): Trading symbol, such as "BTCUSDT".
+        api_key (str): API key.
+        api_secret (str): API secret.
+    """
+    from order_management import clear_orders_file
+    # Close open positions
+    close_open_positions(symbol, api_key, api_secret)
+
+    # Cancel all buy and sell orders
+    cancel_existing_orders(symbol, api_key, api_secret)
+
+    # Clear the JSON file
+    clear_orders_file(f"{symbol}_open_orders.json")  # Use a symbol-specific file
+
+    # Notify that the grid has been reset
+    message = f"{symbol} Grid reset, bot will now place new orders in the next loop."
+    log_and_print(message)
+
+def handle_binance_error(error, symbol, api_key, api_secret):
+    """
+    Handles a Binance error and performs a grid reset or other actions if needed.
+
+    Args:
+        error (dict): Binance API error containing 'code' and 'msg'.
+        symbol (str): Trading symbol, such as "BTCUSDT".
+        api_key (str): API key.
+        api_secret (str): API secret.
+    """
+    error_code = error.get('code')
+    error_message = error.get('msg')
+
+    print(f"Binance API Error: {error_code} - {error_message}")
+
+    # Fetch all symbols from config.json
+    crypto_settings = config.get("crypto_settings", {})
+    symbols = [settings["symbol"] for settings in crypto_settings.values()]
+
+    # Handle different error codes
+    if error_code == -1021:  # Timestamp error
+        print("Timestamp issue detected. Synchronizing time and resetting grid...")
+        time.sleep(2)  # Wait a moment before synchronizing time
+        reset_grid(symbol, api_key, api_secret)
+        return
+
+    elif error_code == -2019:  # Insufficient margin
+        message = "Insufficient margin detected. Closing positions and resetting grid for all symbols, then shutting down the bot..."
+        log_and_print(message)
+
+        # Reset all symbols before shutting down
+        for active_symbol in symbols:
+            try:
+                reset_grid(active_symbol, api_key, api_secret)
+            except Exception as e:
+                logger.error(f"Error while resetting grid for {active_symbol}: {e}")
+                print(f"Error while resetting grid for {active_symbol}: {e}")
+
+        sys.exit("Bot stopped due to insufficient margin.")
+
+    elif error_code == 400:  # Bad Request
+        message = f"{symbol} Bad Request error detected. Checking symbol validity and resetting grid if necessary..."
+        log_and_print(message)
+        reset_grid(symbol, api_key, api_secret)
+        return
+
+    elif error_code == -1008: # Server is currently overloaded with other requests. Please try again in a few minutes.
+        message = f"{symbol} Server is currently overloaded with other requests. Please try again in a few minutes.."
+        log_and_print(message)
+        time.sleep(2)
+        return
+
+    elif error_code == -4164:  # Insufficient notional. Skip the symbol
+        message = f"{symbol} Order's notional must be no smaller than 5 (unless you choose reduce only)."
+        log_and_print(message)
+        return
+
+    # Additional common error codes can be added here
+    else:
+        message = f"{symbol} Unhandled error ({error_code}): {error_message}. Closing positions and resetting grid as a precaution"
+        log_and_print(message)
+        reset_grid(symbol, api_key, api_secret)
+        return
+
+def log_and_print(message):
+    print(message)
+    logger.info(message)
