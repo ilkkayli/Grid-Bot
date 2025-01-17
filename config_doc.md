@@ -31,5 +31,5 @@
 
 ```progressive_grid```: This setting determines whether the grid gaps in neutral mode are fixed ("False") or expanding at the edges ("True").
 
-```grid_progression```: The setting defines the magnitude of the growth in grid spacing for a progressive grid eg. 1.1
+```grid_progression```: The setting defines the magnitude of the growth in grid spacing and order quantity for a progressive grid eg. 1.1. The multiplier changes the grid intervals and the size of orders exponentially, so it is recommended to use small multipliers, for example, between 1.1 and 1.7. Ensure with particular caution that the size of the multiplier takes into account the market risks you are willing to accept.
 
