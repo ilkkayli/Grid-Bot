@@ -7,7 +7,7 @@ This Grid Bot is a trading algorithm designed for Binance futures, capable of ex
 ## Features
 Three Modes: Supports neutral, long, and short modes.
 
-**Neutral Mode:** Places buy and sell orders both above and below the market price to capture profits from any direction. Neutral mode supports two types of grids: one with fixed gaps, where orders are evenly spaced, and a progressive grid where the spacing between orders is denser in the middle and sparser at the edges.
+**Neutral Mode:** Places buy and sell orders both above and below the market price to capture profits from any direction. Neutral mode supports two types of grids: one with fixed gaps, where orders are evenly spaced, and a progressive grid where the spacing between orders is denser in the middle and sparser at the edges. Additionally, the progressive grid increases the order sizes toward the edges, aiming to minimize losses in the grid's boundary areas. It is recommended to familiarize yourself with how the position price is calculated on the platform, as it directly impacts the profitability of trades.
 
 **Long Mode:** Places buy orders above the market price and sell orders above buy orders, aligning with an upward trend.
 
