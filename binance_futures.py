@@ -556,3 +556,26 @@ def handle_binance_error(error, symbol, api_key, api_secret):
 def log_and_print(message):
     print(message)
     logger.info(message)
+
+def get_step_size(symbol, api_key, api_secret):
+    endpoint = "/fapi/v1/exchangeInfo"
+
+    try:
+        response = requests.get(base_url + endpoint)
+        response.raise_for_status()
+        data = response.json()
+
+        if "symbols" in data:
+            for s in data['symbols']:
+                if s['symbol'] == symbol:
+                    for f in s['filters']:
+                        if f['filterType'] == 'LOT_SIZE':
+                            step_size = float(f['stepSize'])
+                            return step_size
+        print(f"Symbol {symbol} not found in exchange info.")
+        return None
+
+    except Exception as e:
+        print(f"Error fetching Futures step size: {e}")
+        return None
+
