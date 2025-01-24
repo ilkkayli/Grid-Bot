@@ -1,22 +1,7 @@
 import json
-from binance_futures import (
-    get_market_price,
-    get_open_orders,
-    get_tick_size,
-    place_limit_order,
-    place_stop_market_order,
-    reset_grid,
-    get_open_positions,
-    get_step_size
-)
-from file_utils import (
-    get_orders_file,
-    load_previous_orders,
-    save_current_orders,
-    clear_orders_file,
-    save_open_orders_to_file,
-    load_open_orders_from_file,
-)
+import os
+from binance_futures import get_market_price, get_open_orders, get_tick_size,place_limit_order, place_stop_market_order, reset_grid, get_open_positions
+from logging_config import logger
 
 # Fetch settings
 def load_config(file_path='config.json'):
@@ -29,13 +14,62 @@ api_key = api_credentials.get("api_key")
 api_secret = api_credentials.get("api_secret")
 base_url = api_credentials.get("base_url")
 
+ORDERS_FILE_TEMPLATE = "{}_open_orders.json"
+
+def get_orders_file(symbol):
+    """Returns the filename for the specific symbol."""
+    return ORDERS_FILE_TEMPLATE.format(symbol)
+
+def load_previous_orders(symbol):
+    """Loads previous orders from a file for the specific symbol."""
+    filename = get_orders_file(symbol)
+    if os.path.exists(filename):
+        with open(filename, "r") as file:
+            return json.load(file)
+    return []
+
+def save_current_orders(symbol, orders):
+    """Saves current orders to a file for the specific symbol."""
+    filename = get_orders_file(symbol)
+    with open(filename, "w") as file:
+        json.dump(orders, file)
+
+def clear_orders_file(symbol):
+    """Clears the file for the specific symbol when the bot starts."""
+    filename = get_orders_file(symbol)
+    with open(filename, 'w') as file:
+        json.dump([], file)
+    print(f"{filename} cleared.")
+
+def save_open_orders_to_file(symbol, open_orders):
+    """Saves open orders to a file for the specific symbol."""
+    filename = get_orders_file(symbol)
+    try:
+        with open(filename, 'w') as file:
+            json.dump(open_orders, file, indent=4)
+        print(f"Saved open orders to {filename}.")
+    except Exception as e:
+        print(f"Error saving open orders to file: {e}")
+
+def load_open_orders_from_file(symbol):
+    """Reads open orders from the specific symbol's file."""
+    filename = get_orders_file(symbol)
+    try:
+        with open(filename, 'r') as file:
+            return json.load(file)
+    except FileNotFoundError:
+        print(f"{filename} not found. Assuming no previous orders.")
+        return []
+    except json.JSONDecodeError:
+        print(f"Error decoding JSON from {filename}. Assuming no valid orders.")
+        return []
+    except Exception as e:
+        print(f"Error reading {filename}: {e}")
+        return []
+
 def round_to_tick_size(price, tick_size, offset=0.000001):
     """Rounds the price to the nearest tick size with a small offset to avoid repeated prices."""
     return round((price + offset) / tick_size) * tick_size
-
-def round_to_step_size(quantity, step_size, offset=0.000001):
-    """Rounds the quantity to the nearest step size with a small offset."""
-    return round((quantity + offset) / step_size) * step_size
 
 def calculate_variable_grid_spacing(level, base_spacing, grid_progression, max_spacing=None):
     """Calculate progressive grid spacing using a multiplier, constrained by a max_spacing value."""
@@ -62,14 +96,6 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
     print(f"Tick size: {tick_size}")
 
-    # Retrieve step size for the trading pair
-    step_size = get_step_size(symbol, api_key, api_secret)
-    if step_size is None:
-        print("Error: Could not retrieve step size.")
-        return
-
-    print(f"Step size: {step_size}")
-
     # Calculate base grid_spacing
     base_spacing = market_price * (spacing_percentage / 100)  # from the market price
     print(f"Base grid spacing: {base_spacing}")
@@ -85,7 +111,7 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
         print("Error detected in open orders response.")
         reset_grid(symbol, api_key, api_secret)  # Reset grid on error
     else:
-        #print(f"Current open orders: {open_orders}") # This is for debugging
+        # print(f"Current open orders: {open_orders}") # This is for debugging
         print("Open orders retrieved.")
 
     # Load previous open orders from file
@@ -94,28 +120,24 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
     new_orders = []
 
     if not open_orders:
-    # If there are no open orders, create new grid orders depending on mode
+        # If there are no open orders, create new grid orders depending on mode
         print(f"Mode: {mode}")
 
         if mode == 'neutral':
             # Neutral mode: orders on both sides of the market price
-            print(f"Grid progression: {progressive_grid}")
+            print(f"Grid progression:  {progressive_grid}")
             for level in range(1, grid_levels + 1):
                 print(f"Current Level: {level}")
 
-                if progressive_grid:
-                    # Calculate variable spacing and quantity if progressive_grid flag is True
+                if progressive_grid == True:
+                    # Calculate variable spacing if progressive_grid flag is True
                     buy_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression)
                     sell_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression)
-                    order_quantity_adjusted = round_to_step_size(order_quantity * (grid_progression ** (level - 1)), step_size)
                     print(f"Variable Spacing for BUY: {buy_spacing}, SELL: {sell_spacing}")
-                    print(f"Adjusted Order Quantity: {order_quantity_adjusted}")
                 else:
-                    # Use fixed spacing and quantity if progressive_grid flag is False
+                    # Use fixed spacing if progressive_grid flag is False
                     buy_spacing = sell_spacing = base_spacing
-                    order_quantity_adjusted = round_to_step_size(order_quantity, step_size)
                     print(f"Fixed Spacing: {base_spacing}")
-                    print(f"Fixed Order Quantity: {order_quantity_adjusted}")
 
                 buy_price = round_to_tick_size(market_price - (level * buy_spacing), tick_size)
                 sell_price = round_to_tick_size(market_price + (level * sell_spacing), tick_size)
@@ -125,46 +147,30 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
                 # Placing BUY orders
                 print(f"Placing BUY order at {buy_price}")
-                buy_order = place_limit_order(
-                    symbol, 'BUY', order_quantity_adjusted, buy_price, api_key, api_secret, 'LONG', working_type
-                )
+                buy_order = place_limit_order(symbol, 'BUY', order_quantity, buy_price, api_key, api_secret, 'LONG', working_type)
 
-                # Check if BUY order was successfully placed
+                # Check if buy order was successfully placed
                 if buy_order is None:
                     print(f"Error placing BUY order at {buy_price}. Skipping to the next iteration.")
                     break  # Stop processing this symbol's grid and exit the loop
                 elif 'orderId' in buy_order:
-                    # Save order details, including quantity
-                    new_orders.append({
-                        'orderId': buy_order['orderId'],
-                        'price': buy_price,
-                        'side': 'BUY',
-                        'quantity': round_to_step_size(order_quantity_adjusted, step_size)
-                    })
-                    print(f"BUY Order Placed Successfully: {buy_order['orderId']}, Quantity: {order_quantity_adjusted}")
+                    new_orders.append({'orderId': buy_order['orderId'], 'price': buy_price, 'side': 'BUY'})
+                    print(f"BUY Order Placed Successfully: {buy_order['orderId']}")
                 else:
                     print(f"Error placing BUY order at {buy_price}. Unexpected API response: {buy_order}")
                     break  # Stop processing this symbol's grid due to an unexpected response
 
                 # Placing SELL orders
                 print(f"Placing SELL order at {sell_price}")
-                sell_order = place_limit_order(
-                    symbol, 'SELL', order_quantity_adjusted, sell_price, api_key, api_secret, 'SHORT', working_type
-                )
+                sell_order = place_limit_order(symbol, 'SELL', order_quantity, sell_price, api_key, api_secret, 'SHORT', working_type)
 
                 # Check if SELL order was successfully placed
                 if sell_order is None:
                     print(f"Error placing SELL order at {sell_price}. Stopping grid creation for {symbol}.")
                     break  # Stop processing this symbol's grid
                 elif 'orderId' in sell_order:
-                    # Save order details, including quantity
-                    new_orders.append({
-                        'orderId': sell_order['orderId'],
-                        'price': sell_price,
-                        'side': 'SELL',
-                        'quantity': round_to_step_size(order_quantity_adjusted, step_size)
-                    })
-                    print(f"SELL Order Placed Successfully: {sell_order['orderId']}, Quantity: {order_quantity_adjusted}")
+                    new_orders.append({'orderId': sell_order['orderId'], 'price': sell_price, 'side': 'SELL'})
+                    print(f"SELL Order Placed Successfully: {sell_order['orderId']}")
                 else:
                     print(f"Error placing SELL order at {sell_price}. Unexpected API response: {sell_order}")
                     break  # Stop processing this symbol's grid due to an unexpected response
@@ -290,6 +296,13 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     )
                     new_order_price = round_to_tick_size(price, tick_size)
 
+                    # Check the position price and adjust the price of a new order if needed.
+                    position_price = float(open_positions[0]['entryPrice'])
+                    if new_side == 'BUY' and new_order_price > position_price:
+                        new_order_price = round_to_tick_size(position_price - (0.002 * position_price), tick_size)  # 0.2% position hinnan alapuolelle
+                    elif new_side == 'SELL' and new_order_price < position_price:
+                        new_order_price = round_to_tick_size(position_price + (0.002 * position_price), tick_size)  # 0.2% position hinnan yläpuolelle
+
                     # Check if an order already exists at this level within tolerance
                     if any(
                         abs(float(order['price']) - new_order_price) <= tolerance
@@ -299,12 +312,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                         print(f"{new_side} order already exists at {new_order_price} within tolerance range.")
                         continue
 
-                    # Use the previous order's quantity for the new order
-                    order_quantity = previous_order['quantity']
-
                     # Place new order to replace the filled order
-                    print(f"Placing new {new_side} order at {new_order_price} with quantity {order_quantity} "
-                          f"to replace filled {side} order")
+                    print(f"Placing new {new_side} order at {new_order_price} to replace filled {side} order")
                     new_order = place_limit_order(
                         symbol, new_side, order_quantity, new_order_price, api_key, api_secret,
                         'SHORT' if new_side == 'SELL' else 'LONG', working_type
@@ -315,15 +324,11 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                         print(f"Error placing new {new_side} order at {new_order_price}. Skipping to the next iteration.")
                         break  # Stop processing this symbol's grid and exit the loop
                     elif 'orderId' in new_order:
-                        new_orders.append({
-                            'orderId': new_order['orderId'],
-                            'price': new_order_price,
-                            'side': new_side,
-                            'quantity': order_quantity  # Save quantity to the new order
-                        })
+                        new_orders.append({'orderId': new_order['orderId'], 'price': new_order_price, 'side': new_side})
                     else:
                         print(f"Error placing new order at {new_order_price}")
                         break
+
 
             # Check if the grid needs to be reset when price exceeds a certain threshold
             sell_orders = [float(order['price']) for order in open_orders if order['side'] == 'SELL']
