@@ -1,8 +1,8 @@
 import time
 import json
-from order_management import handle_grid_orders, get_open_orders, reset_grid
+from order_management import handle_grid_orders, get_open_orders, reset_grid, clear_orders_file
 from binance_futures import set_leverage_if_needed
-from file_utils import clear_orders_file
+
 
 def load_config(file_path="config.json"):
     """
@@ -92,6 +92,7 @@ def process_symbol(symbol, params, previous_settings, api_key, api_secret):
         grid_progression=grid_progression
     )
 
+
 def main_loop():
     """
     Main execution loop for the grid bot.
@@ -105,10 +106,8 @@ def main_loop():
 
     # Initialize active symbols and clear orders file if needed
     active_symbols = set(crypto_settings.keys())
-    for symbol in active_symbols:
-        open_orders = get_open_orders(symbol, api_key, api_secret)
-        if not open_orders:
-            clear_orders_file(symbol)
+    if not get_open_orders:
+        clear_orders_file()
 
     previous_settings = {}
 
@@ -127,7 +126,7 @@ def main_loop():
             process_symbol(symbol, params, previous_settings, api_key, api_secret)
 
         # Wait before starting the next loop
-        time.sleep(10)
+        time.sleep(20)
 
 
 if __name__ == "__main__":
