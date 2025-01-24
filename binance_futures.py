@@ -70,61 +70,59 @@ def get_open_positions(symbol, api_key, api_secret):
         list: List of open positions where positionAmt != 0.
     """
     endpoint = '/fapi/v2/positionRisk'
-    timestamp = get_server_time(api_key, api_secret)
+    timestamp = int(time.time() * 1000)  # Generate local timestamp
 
-    if not timestamp:
-        print("Failed to fetch server time.")
-        return None
-
-    query_string = f'timestamp={timestamp}'
+    params = {'timestamp': timestamp}
+    query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
     signature = create_signature(query_string, api_secret)
+    params['signature'] = signature
     headers = {'X-MBX-APIKEY': api_key}
 
     try:
-        response = requests.get(base_url + endpoint + '?' + query_string + '&signature=' + signature, headers=headers)
+        response = requests.get(base_url + endpoint, headers=headers, params=params)
         response.raise_for_status()
         positions = response.json()
 
         # Return only positions with an open amount (positionAmt != 0)
         return [pos for pos in positions if pos['symbol'] == symbol and float(pos['positionAmt']) != 0]
 
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP Error: {e.response.status_code} - {e.response.text}")
     except Exception as e:
         print(f"Error fetching open positions: {e}")
-        return None
+    return None
 
 def get_open_orders(symbol, api_key, api_secret):
+    """
+    Fetches open orders for a given symbol.
+
+    Args:
+        symbol (str): Trading symbol, e.g., "BTCUSDT".
+        api_key (str): API key.
+        api_secret (str): API secret.
+
+    Returns:
+        list: List of open orders.
+    """
     endpoint = '/fapi/v1/openOrders'
-    max_retries=3
-    delay=1
+    timestamp = int(time.time() * 1000)  # Generate local timestamp
 
-    for attempt in range(max_retries):
-        # Fetch the server timestamp
-        server_time = get_server_time(api_key, api_secret)
-        if server_time is None:
-            print("Failed to fetch server time.")
-            time.sleep(delay)
-            continue
+    params = {'symbol': symbol, 'timestamp': timestamp}
+    query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
+    signature = create_signature(query_string, api_secret)
+    params['signature'] = signature
+    headers = {'X-MBX-APIKEY': api_key}
 
-        # Set parameters with server timestamp
-        params = {'symbol': symbol, 'timestamp': server_time}
-        query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
-        signature = create_signature(query_string, api_secret)
-        params['signature'] = signature
-
-        headers = {'X-MBX-APIKEY': api_key}
-
-        try:
-            # Attempt to fetch open orders
-            response = requests.get(base_url + endpoint, headers=headers, params=params)
-            response.raise_for_status()
-            orders = response.json()
-            return orders if orders else []  # Return an empty list if no open orders found
-        except Exception as e:
-            print(f"Error fetching open orders (attempt {attempt + 1}/{max_retries}): {e}")
-            time.sleep(delay)
-
-    print("Max retries reached. Returning None to indicate an error.")
-    return None  # Return None explicitly if all attempts fail
+    try:
+        response = requests.get(base_url + endpoint, headers=headers, params=params)
+        response.raise_for_status()
+        orders = response.json()
+        return orders if orders else []  # Return an empty list if no open orders found
+    except requests.exceptions.HTTPError as e:
+        print(f"HTTP Error: {e.response.status_code} - {e.response.text}")
+    except Exception as e:
+        print(f"Error fetching open orders: {e}")
+    return None
 
 def cancel_existing_orders(symbol, api_key, api_secret):
     open_orders = get_open_orders(symbol, api_key, api_secret)
@@ -556,26 +554,3 @@ def handle_binance_error(error, symbol, api_key, api_secret):
 def log_and_print(message):
     print(message)
     logger.info(message)
-
-def get_step_size(symbol, api_key, api_secret):
-    endpoint = "/fapi/v1/exchangeInfo"
-
-    try:
-        response = requests.get(base_url + endpoint)
-        response.raise_for_status()
-        data = response.json()
-
-        if "symbols" in data:
-            for s in data['symbols']:
-                if s['symbol'] == symbol:
-                    for f in s['filters']:
-                        if f['filterType'] == 'LOT_SIZE':
-                            step_size = float(f['stepSize'])
-                            return step_size
-        print(f"Symbol {symbol} not found in exchange info.")
-        return None
-
-    except Exception as e:
-        print(f"Error fetching Futures step size: {e}")
-        return None
-
