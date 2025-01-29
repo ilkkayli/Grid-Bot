@@ -1,6 +1,6 @@
 import json
 import os
-from binance_futures import get_market_price, get_open_orders, get_tick_size,place_limit_order, place_stop_market_order, reset_grid, get_open_positions
+from binance_futures import get_market_price, get_open_orders, get_tick_size,place_limit_order, place_stop_market_order, reset_grid, get_open_positions, log_and_print
 from logging_config import logger
 
 # Fetch settings
@@ -108,7 +108,9 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
     # Check for error indication in the response
     if open_orders is None:
+        message = f"{symbol} Error detected in open orders response."
         print("Error detected in open orders response.")
+        log_and_print(message)
         reset_grid(symbol, api_key, api_secret)  # Reset grid on error
     else:
         # print(f"Current open orders: {open_orders}") # This is for debugging
@@ -273,7 +275,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     # If not open position then re-adjust the grid
                     open_positions = get_open_positions(symbol, api_key, api_secret)
                     if not open_positions:
-                        print("No open positions detected. Resetting grid.")
+                        message = f"{symbol} No open positions detected. Assuming that position is closed. Resetting grid."
+                        log_and_print(message)
                         reset_grid(symbol, api_key, api_secret)
                         return
 
@@ -345,7 +348,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
                     if (lowest_sell_price is not None and market_price < lowest_sell_price - base_spacing * 1.5 - tolerance) or \
                        (highest_buy_price is not None and market_price > highest_buy_price + base_spacing * 1.5 + tolerance):
-                        print("Price exceeded stop-loss threshold with tolerance. Resetting grid.")
+                        message = f"{symbol} Price exceeded stop-loss threshold with tolerance. Resetting grid."
+                        log_and_print(message)
                         reset_grid(symbol, api_key, api_secret)
                         return
                 elif not sell_orders and not buy_orders:
@@ -366,7 +370,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
                 # If the lowest buy stop-price is too far from the market price, reset the grid
                 if float(lowest_buy_order['stopPrice']) - float(market_price) > 2 * base_spacing:
-                    print("Lowest buy order is too far from the market price, resetting the grid...")
+                    message = f"{symbol} Lowest buy order is too far from the market price. Resetting grid."
+                    log_and_print(message)
                     reset_grid(symbol, api_key, api_secret)
                     return  # Stop here and return in the next loop to set new orders
             else:
@@ -427,7 +432,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
                 # If the highest sell order is no longer in open orders, it has been filled
                 if not any(order['orderId'] == highest_sell_order['orderId'] for order in open_orders):
-                    print("Highest sell order filled, resetting the grid...")
+                    message = f"{symbol} Highest sell order filled. Resetting grid."
+                    log_and_print(message)
                     reset_grid(symbol, api_key, api_secret)
                 else:
                     print("Highest sell order is still open, no need to reset the grid.")
@@ -446,7 +452,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
                 # If the highest sell stop-price is too far from the market price, reset the grid
                 if float(market_price) - float(highest_sell_order['stopPrice']) > 2 * base_spacing:
-                    print("Highest sell order is too far from the market price, resetting the grid...")
+                    message = f"{symbol} Highest sell order is too far from the market price. Resetting grid."
+                    log_and_print(message)
                     reset_grid(symbol, api_key, api_secret)
                     return  # Stop here and return in the next loop to set new orders
             else:
@@ -507,7 +514,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
                 # If the lowest buy order is no longer in open orders, it has been filled
                 if not any(order['orderId'] == lowest_buy_order['orderId'] for order in open_orders):
-                    print("Lowest buy order filled, resetting the grid...")
+                    message = f"{symbol} Lowest buy order filled. Resetting grid."
+                    log_and_print(message)
                     reset_grid(symbol, api_key, api_secret)
                 else:
                     print("Lowest buy order is still open, no need to reset the grid.")
