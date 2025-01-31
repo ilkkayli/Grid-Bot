@@ -109,9 +109,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
     # Check for error indication in the response
     if open_orders is None:
         message = f"{symbol} Error detected in open orders response."
-        print("Error detected in open orders response.")
         log_and_print(message)
-        reset_grid(symbol, api_key, api_secret)  # Reset grid on error
+        return # Abort the loop
     else:
         # print(f"Current open orders: {open_orders}") # This is for debugging
         print("Open orders retrieved.")
