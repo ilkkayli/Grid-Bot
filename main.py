@@ -67,9 +67,6 @@ def process_symbol(symbol, params, previous_settings, api_key, api_secret):
     grid_levels = params.get("grid_levels")
     order_quantity = params.get("order_quantity")
     working_type = params.get("working_type")
-    margin_type = params.get("margin_type")
-    quantity_multiplier = params.get("quantity_multiplier")
-    mode = params.get("mode")
     spacing_percentage = params.get("spacing_percentage")
     progressive_grid = params.get("progressive_grid", "False").lower() == "true"
     grid_progression = params.get("grid_progression")
@@ -84,9 +81,6 @@ def process_symbol(symbol, params, previous_settings, api_key, api_secret):
         order_quantity=order_quantity,
         working_type=working_type,
         leverage=leverage,
-        margin_type=margin_type,
-        quantity_multiplier=quantity_multiplier,
-        mode=mode,
         spacing_percentage=spacing_percentage,
         progressive_grid=progressive_grid,
         grid_progression=grid_progression
