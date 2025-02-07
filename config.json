@@ -11,9 +11,6 @@
       "order_quantity": 800,
       "working_type": "CONTRACT_PRICE",
       "leverage": 75,
-      "margin_type": "CROSS",
-      "quantity_multiplier": 1,
-      "mode": "neutral",
       "spacing_percentage": 2,
       "progressive_grid" : "False",
       "grid_progression" : 1.1
@@ -24,9 +21,6 @@
       "order_quantity": 45,
       "working_type": "CONTRACT_PRICE",
       "leverage": 75,
-      "margin_type": "CROSS",
-      "quantity_multiplier": 1,
-      "mode": "neutral",
       "spacing_percentage": 2,
       "progressive_grid" : "True",
       "grid_progression" : 1.1
