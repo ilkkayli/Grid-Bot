@@ -21,15 +21,17 @@
 
 ```leverage```: Leverage amount for the trading pair.
 
-```margin_type```: Margin type (always CROSS).
-
-```quantity_multiplier```: A factor used for calculating order quantities.
-
-```mode```: Bot's operation mode (e.g., long, short, or neutral).
-
 ```spacing_percentage```: Percentage difference between price levels. This represents the gap between consecutive orders as a percentage.
 
 ```progressive_grid```: This setting determines whether the grid gaps in neutral mode are fixed ("False") or expanding at the edges ("True").
 
 ```grid_progression```: The setting defines the magnitude of the growth in grid spacing and order quantity for a progressive grid eg. 1.1. The multiplier changes the grid intervals and the size of orders exponentially, so it is recommended to use small multipliers, for example, between 1.1 and 1.7. Ensure with particular caution that the size of the multiplier takes into account the market risks you are willing to accept.
+
+***Notes***
+
+Ensure grid_progression is chosen carefully, as a high multiplier increases risk.
+
+The margin type is assumed to be CROSS, as it is not explicitly set in the current configuration.
+
+
 
