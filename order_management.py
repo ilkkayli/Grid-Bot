@@ -208,11 +208,6 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
     else:
         # Check if the order already exists
-        # Print statements for debugging
-        print(type(previous_orders))
-        print(f"previous_orders: {previous_orders}")
-        print(f"open_orders: {open_orders}")
-
         # Initialize limit_orders with the values from previous_orders, or use an empty dict if not available
         limit_orders = previous_orders.get('limit_orders', {}).copy()
 
