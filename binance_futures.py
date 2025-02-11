@@ -513,6 +513,11 @@ def handle_binance_error(error, symbol, api_key, api_secret):
         reset_grid(symbol, api_key, api_secret)
         return
 
+    elif error_code == -1102:  #  Mandatory parameter 'price' was not sent, was empty/null, or malformed..
+        message = f"{symbol}  Mandatory parameter 'price' was not sent, was empty/null, or malformed..."
+        log_and_print(message)
+        return
+
     elif error_code == -2019:  # Insufficient margin
         message = "Insufficient margin detected. Closing positions and resetting grid for all symbols, then shutting down the bot..."
         log_and_print(message)
@@ -543,6 +548,7 @@ def handle_binance_error(error, symbol, api_key, api_secret):
         message = f"{symbol} Order's notional must be no smaller than 5 (unless you choose reduce only)."
         log_and_print(message)
         return
+
 
     # Additional common error codes can be added here
     else:
