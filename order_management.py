@@ -1,18 +1,13 @@
 import json
 import os
-from binance_futures import get_market_price, get_open_orders, get_tick_size,place_limit_order, place_stop_market_order, reset_grid, get_open_positions, log_and_print, get_step_size
-from logging_config import logger
+from binance_futures import get_market_price, get_open_orders, get_tick_size,place_limit_order, reset_grid, get_open_positions, log_and_print, get_step_size
+from file_utils import load_json
 
 # Fetch settings
-def load_config(file_path='config.json'):
-    with open(file_path, 'r') as file:
-        return json.load(file)
-
-config = load_config()
-api_credentials = config.get("api_credentials", {})
-api_key = api_credentials.get("api_key")
-api_secret = api_credentials.get("api_secret")
-base_url = api_credentials.get("base_url")
+secrets = load_json("secrets.json")
+api_key = secrets.get("api_key")
+api_secret = secrets.get("api_secret")
+base_url = secrets.get("base_url")
 
 ORDERS_FILE_TEMPLATE = "{}_open_orders.json"
 
@@ -208,6 +203,11 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
     else:
         # Check if the order already exists
+        # Print statements for debugging
+        print(type(previous_orders))
+        print(f"previous_orders: {previous_orders}")
+        print(f"open_orders: {open_orders}")
+
         # Initialize limit_orders with the values from previous_orders, or use an empty dict if not available
         limit_orders = previous_orders.get('limit_orders', {}).copy()
 
