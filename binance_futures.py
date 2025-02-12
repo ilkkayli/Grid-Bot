@@ -2,20 +2,15 @@ import requests
 import hashlib
 import hmac
 import time
-import json
 import sys
 from logging_config import logger
+from file_utils import load_json
 
 # Fetch settings
-def load_config(file_path='config.json'):
-    with open(file_path, 'r') as file:
-        return json.load(file)
-
-config = load_config()
-api_credentials = config.get("api_credentials", {})
-api_key = api_credentials.get("api_key")
-api_secret = api_credentials.get("api_secret")
-base_url = api_credentials.get("base_url")
+secrets = load_json("secrets.json")
+api_key = secrets.get("api_key")
+api_secret = secrets.get("api_secret")
+base_url = secrets.get("base_url")
 
 def get_server_time(api_key, api_secret):
     """
@@ -548,7 +543,6 @@ def handle_binance_error(error, symbol, api_key, api_secret):
         message = f"{symbol} Order's notional must be no smaller than 5 (unless you choose reduce only)."
         log_and_print(message)
         return
-
 
     # Additional common error codes can be added here
     else:
