@@ -1,9 +1,4 @@
 {
-  "api_credentials": {
-    "api_key": "YOUR_API_KEY",
-    "api_secret": "YOUR_API_SECRET",
-    "base_url": "https://fapi.binance.com"
-  },
   "crypto_settings": {
     "1000SHIBUSDT": {
       "symbol": "1000SHIBUSDT",
