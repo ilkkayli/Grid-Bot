@@ -53,3 +53,16 @@ def load_open_orders_from_file(symbol):
     except Exception as e:
         print(f"Error reading {filename}: {e}")
         return []
+
+def load_json(file_path):
+    """
+    Load configuration from a JSON file.
+
+    Args:
+        file_path (str): Path to the JSON file.
+
+    Returns:
+        dict: Configuration settings as a dictionary.
+    """
+    with open(file_path, "r") as file:
+        return json.load(file)
