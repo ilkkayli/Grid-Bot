@@ -2,6 +2,7 @@ import time
 from order_management import handle_grid_orders, get_open_orders, reset_grid, clear_orders_file
 from binance_futures import set_leverage_if_needed
 from file_utils import load_json
+from binance_websockets import start_websocket
 
 def update_active_symbols(current_symbols, active_symbols, api_key, api_secret):
     """
@@ -32,7 +33,6 @@ def process_symbol(symbol, params, previous_settings, api_key, api_secret):
     grid_levels = params.get("grid_levels")
     order_quantity = params.get("order_quantity")
     working_type = params.get("working_type")
-    spacing_percentage = params.get("spacing_percentage")
     progressive_grid = params.get("progressive_grid", "False").lower() == "true"
     grid_progression = params.get("grid_progression")
 
@@ -44,7 +44,6 @@ def process_symbol(symbol, params, previous_settings, api_key, api_secret):
         order_quantity=order_quantity,
         working_type=working_type,
         leverage=leverage,
-        spacing_percentage=spacing_percentage,
         progressive_grid=progressive_grid,
         grid_progression=grid_progression
     )
@@ -74,6 +73,7 @@ def main_loop():
         active_symbols = update_active_symbols(current_symbols, active_symbols, api_key, api_secret)
 
         for symbol, params in crypto_settings.items():
+            start_websocket(symbol.lower())
             process_symbol(symbol, params, previous_settings, api_key, api_secret)
 
         time.sleep(10)
