@@ -1,7 +1,7 @@
 ***Settings***
 
 ***api_credentials***
-Please note, that there three variables are set in a separate file ```secrets.json```
+Please note, that these three variables are set in a separate file ```secrets.json```
 
 ```api_key```: Binance API key.
 
