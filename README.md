@@ -20,10 +20,9 @@ The bot allows custom configuration through a dictionary in the ```config.json``
 ```
 - grid_levels: Number of grid levels.
 - base_order_quantity: Quantity per order.
-- spacing_percentage: Defines spacing between grid levels, typically as a percentage of market price.
 - leverage, margin_type, and other Binance futures-specific settings.
 ```
-
+Additinally, there is ```spacing_percentage``` a dynamic, market-adaptive variable which defines spacing between grid levels, typically as a percentage of market price. 
 If setting the leverage doesn't work for some reason, you can set it manually either through the browser or the Binance app.
 
 # Setup Instructions
