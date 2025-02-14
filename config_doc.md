@@ -1,6 +1,7 @@
 ***Settings***
 
 ***api_credentials***
+Please note, that there three variables are set in a separate file ```secrets.json```
 
 ```api_key```: Binance API key.
 
@@ -20,8 +21,6 @@
 ```working_type```: Price type definition (CONTRACT_PRICE or MARK_PRICE).
 
 ```leverage```: Leverage amount for the trading pair.
-
-```spacing_percentage```: Percentage difference between price levels. This represents the gap between consecutive orders as a percentage.
 
 ```progressive_grid```: This setting determines whether the grid gaps in neutral mode are fixed ("False") or expanding at the edges ("True").
 
