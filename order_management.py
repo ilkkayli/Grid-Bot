@@ -1,7 +1,8 @@
 import json
 import os
-from binance_futures import get_market_price, get_open_orders, get_tick_size,place_limit_order, reset_grid, get_open_positions, log_and_print, get_step_size
+from binance_futures import get_open_orders, get_tick_size,place_limit_order, reset_grid, get_open_positions, log_and_print, get_step_size, calculate_dynamic_base_spacing
 from file_utils import load_json
+from binance_websockets import get_latest_price
 
 # Fetch settings
 secrets = load_json("secrets.json")
@@ -78,14 +79,15 @@ def calculate_variable_grid_spacing(level, base_spacing, grid_progression, max_s
     return spacing
 
 # Modified handle_grid_orders function for neutral, long, and short modes
-def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, spacing_percentage, progressive_grid, grid_progression):
+def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, progressive_grid, grid_progression):
+
     # Retrieve current market price
-    market_price = get_market_price(symbol, api_key, api_secret)
+    market_price = get_latest_price(symbol)
     if market_price is None:
-        print("Error: Could not retrieve market price.")
+        print(f"Error: Could not retrieve market price for {symbol}.")
         return
 
-    print(f"Market price: {market_price}")
+    print(f"Market price for {symbol}: {market_price}")
 
     # Retrieve tick size for the trading pair
     tick_size = get_tick_size(symbol, api_key, api_secret)
@@ -103,7 +105,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
     print(f"Step size: {step_size}")
 
     # Calculate base grid_spacing
-    base_spacing = market_price * (spacing_percentage / 100)  # from the market price
+    new_base_spacing = calculate_dynamic_base_spacing(symbol, api_key, api_secret)
+    base_spacing = market_price * new_base_spacing   # from the market price
     print(f"Base grid spacing: {base_spacing}")
 
     # Define price tolerance (5% of base spacing, adjustable)
@@ -203,11 +206,6 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
     else:
         # Check if the order already exists
-        # Print statements for debugging
-        print(type(previous_orders))
-        print(f"previous_orders: {previous_orders}")
-        print(f"open_orders: {open_orders}")
-
         # Initialize limit_orders with the values from previous_orders, or use an empty dict if not available
         limit_orders = previous_orders.get('limit_orders', {}).copy()
 
