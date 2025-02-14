@@ -34,21 +34,6 @@ def get_server_time(api_key, api_secret):
         print(f"Error fetching server time: {e}")
         return None
 
-
-def get_market_price(symbol, api_key, api_secret):
-    try:
-        endpoint = '/fapi/v1/ticker/price'
-        params = {'symbol': symbol}
-        response = requests.get(base_url + endpoint, params=params)
-        if response.status_code == 200:
-            return float(response.json()['price'])
-        else:
-            print(f"Failed to get market price: {response.status_code}")
-            return None
-    except Exception as e:
-        print(f"Error: {e}")
-        return None
-
 def create_signature(query_string, secret):
     return hmac.new(secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
 
@@ -569,6 +554,65 @@ def get_step_size(symbol, api_key, api_secret):
     except Exception as e:
         print(f"Error fetching Futures step size: {e}")
         return None
+
+def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=2, min_spacing=0.0001):
+    """
+    Calculates the dynamic base_spacing value based on the amplitude of the last three 4-hour candles.
+
+    Args:
+        symbol (str): Trading pair, e.g., "VINEUSDT".
+        api_key (str): API key.
+        api_secret (str): API secret.
+        multiplier (float, optional): Multiplier for scaling the spacing. Default is 2.
+        min_spacing (float, optional): Minimum spacing value. Default is 0.0001.
+        default_spacing (float, optional): Default spacing if data retrieval fails. Default is 0.007 (0.7%).
+
+    Returns:
+        float: Calculated base_spacing or default value.
+    """
+    default_spacing=0.007
+
+    endpoint = "/fapi/v1/klines"
+    params = {
+        "symbol": symbol.upper(),
+        "interval": "4h",
+        "limit": 3  # Fetch the last 3 4H candles
+    }
+
+    try:
+        response = requests.get(base_url + endpoint, params=params)
+        response.raise_for_status()
+        candles = response.json()
+
+        amplitudes = []
+
+        for candle in candles:
+            high = float(candle[2])
+            low = float(candle[3])
+            if low > 0:
+                amplitude = (high - low) / low  # Percentage change
+                amplitudes.append(amplitude)
+
+        if not amplitudes:
+            logger.warning(f"No amplitude data available for {symbol}. Using default base_spacing: {default_spacing:.5%}")
+            return default_spacing
+
+        avg_amplitude = sum(amplitudes) / len(amplitudes)
+
+        # Apply the average amplitude to the latest price and scale
+        latest_price = float(candles[-1][4])  # Latest closing price
+        dynamic_base_spacing = max(avg_amplitude * multiplier * latest_price, min_spacing)
+
+        logger.info(f"Symbol: {symbol}, Avg Amplitude: {avg_amplitude:.5f}, Base Spacing: {dynamic_base_spacing:.8f}")
+        return dynamic_base_spacing
+
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"HTTP Error: {e.response.status_code} - {e.response.text}")
+    except Exception as e:
+        logger.error(f"Error fetching candlestick data: {e}")
+
+    logger.warning(f"Falling back to default base_spacing: {default_spacing:.5%}")
+    return default_spacing
 
 def log_and_print(message):
     print(message)
