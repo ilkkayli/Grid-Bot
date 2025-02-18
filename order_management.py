@@ -1,6 +1,6 @@
 import json
 import os
-from binance_futures import get_open_orders, get_tick_size,place_limit_order, reset_grid, get_open_positions, log_and_print, get_step_size, calculate_dynamic_base_spacing
+from binance_futures import get_open_orders, get_tick_size,place_limit_order, reset_grid, get_open_positions, log_and_print, get_step_size, calculate_dynamic_base_spacing, get_market_price
 from file_utils import load_json
 from binance_websockets import get_latest_price
 
@@ -79,13 +79,21 @@ def calculate_variable_grid_spacing(level, base_spacing, grid_progression, max_s
     return spacing
 
 # Modified handle_grid_orders function for neutral, long, and short modes
-def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, progressive_grid, grid_progression):
+def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, progressive_grid, grid_progression, use_websocket):
 
     # Retrieve current market price
-    market_price = get_latest_price(symbol)
+    if use_websocket:
+        market_price = get_latest_price(symbol)
+        print(f"WebSocket price retrieved {symbol} {market_price}")
+        if market_price is None:  # Fallback to API call if websocket is not respoding
+            print(f"WebSocket price unavailable, fetching from API for {symbol}...")
+            market_price = get_market_price(symbol, api_key, api_secret)
+    else:
+        market_price = get_market_price(symbol, api_key, api_secret)
+
     if market_price is None:
         print(f"Error: Could not retrieve market price for {symbol}.")
-        return
+        return None
 
     print(f"Market price for {symbol}: {market_price}")
 
@@ -105,8 +113,7 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
     print(f"Step size: {step_size}")
 
     # Calculate base grid_spacing
-    new_base_spacing = calculate_dynamic_base_spacing(symbol, api_key, api_secret)
-    base_spacing = market_price * new_base_spacing   # from the market price
+    base_spacing = calculate_dynamic_base_spacing(symbol, api_key, api_secret)
     print(f"Base grid spacing: {base_spacing}")
 
     # Define price tolerance (5% of base spacing, adjustable)
@@ -282,8 +289,6 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     break
 
         # Check if the grid needs to be reset when price exceeds a certain threshold
-        print(f"Previous orders: {previous_orders}")
-
         # Extract the lowest buy and highest sell order price from limit_orders
         lowest_buy_order_price = limit_orders.get('lowest_buy_order_price')
         highest_sell_order_price = limit_orders.get('highest_sell_order_price')
