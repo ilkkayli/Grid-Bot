@@ -5,12 +5,27 @@ import time
 import sys
 from logging_config import logger
 from file_utils import load_json
+import os
 
 # Fetch settings
 secrets = load_json("secrets.json")
 api_key = secrets.get("api_key")
 api_secret = secrets.get("api_secret")
 base_url = secrets.get("base_url")
+
+def get_market_price(symbol, api_key, api_secret):
+    try:
+        endpoint = '/fapi/v1/ticker/price'
+        params = {'symbol': symbol}
+        response = requests.get(base_url + endpoint, params=params)
+        if response.status_code == 200:
+            return float(response.json()['price'])
+        else:
+            print(f"Failed to get market price: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
 
 def get_server_time(api_key, api_secret):
     """
@@ -434,7 +449,7 @@ def set_leverage_if_needed(symbol, leverage, api_key, api_secret):
         print(f"Leverage for {symbol} set to {leverage}x successfully.")
         return result
     except requests.exceptions.HTTPError as e:
-        print(f"Failed to set leverage for {symbol}.")
+        print(f"Failed to set leverage for {symbol}: {e}.")
         return None
     except Exception as e:
         print(f"Unhandled error while setting leverage for {symbol}: {e}")
@@ -483,8 +498,13 @@ def handle_binance_error(error, symbol, api_key, api_secret):
     print(f"Binance API Error: {error_code} - {error_message}")
 
     # Fetch all symbols from config.json
+    config = load_json("config.json")
     crypto_settings = config.get("crypto_settings", {})
-    symbols = [settings["symbol"] for settings in crypto_settings.values()]
+
+    symbols = set(crypto_settings.keys())
+
+    #crypto_settings = config.get("crypto_settings", {})
+    #symbols = [settings["symbol"] for settings in crypto_settings.values()]
 
     # Handle different error codes
     if error_code == -1021:  # Timestamp error
@@ -510,7 +530,12 @@ def handle_binance_error(error, symbol, api_key, api_secret):
                 logger.error(f"Error while resetting grid for {active_symbol}: {e}")
                 print(f"Error while resetting grid for {active_symbol}: {e}")
 
-        sys.exit("Bot stopped due to insufficient margin.")
+        # Shutdown the bot safely
+        print("Bot stopping due to insufficient margin.")
+        try:
+            sys.exit(1)  # Shutting down the bot, if in main thread
+        except SystemExit:
+            os._exit(1)  # Forced stop
 
     elif error_code == 400:  # Bad Request
         message = f"{symbol} Bad Request error detected. Checking symbol validity and resetting grid if necessary..."
@@ -533,7 +558,6 @@ def handle_binance_error(error, symbol, api_key, api_secret):
     else:
         message = f"{symbol} Unhandled error ({error_code}): {error_message}. Closing positions and resetting grid as a precaution"
         log_and_print(message)
-        reset_grid(symbol, api_key, api_secret)
         return
 
 def get_step_size(symbol, api_key, api_secret):
@@ -555,7 +579,7 @@ def get_step_size(symbol, api_key, api_secret):
         print(f"Error fetching Futures step size: {e}")
         return None
 
-def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=2, min_spacing=0.0001):
+def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=0.3, min_spacing=0.0001):
     """
     Calculates the dynamic base_spacing value based on the amplitude of the last three 4-hour candles.
 
@@ -565,10 +589,11 @@ def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=2, mi
         api_secret (str): API secret.
         multiplier (float, optional): Multiplier for scaling the spacing. Default is 2.
         min_spacing (float, optional): Minimum spacing value. Default is 0.0001.
-        default_spacing (float, optional): Default spacing if data retrieval fails. Default is 0.007 (0.7%).
 
     Returns:
         float: Calculated base_spacing or default value.
+
+    Default spacing if data retrieval fails. Default is 0.007 (0.7%).
     """
     default_spacing=0.007
 
