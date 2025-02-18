@@ -3,55 +3,80 @@ import websocket
 from threading import Thread
 import time
 import signal
+from file_utils import load_json  # Import function to load config.json
 
 latest_prices = {}  # Stores the latest prices for different symbols
-price_received = {}  # Dictionary to track if price data has been received for each symbol
+price_received = {}  # Tracks if price data has been received for each symbol
 ws = None
+SYMBOLS = []  # List of trading symbols from config.json
+
+def load_symbols():
+    """ Loads trading symbols from config.json. """
+    global SYMBOLS
+    config = load_json("config.json")
+    crypto_settings = config.get("crypto_settings", {})
+    SYMBOLS = list(crypto_settings.keys())  # Extract symbols
 
 def on_message(ws, message):
     """ Handles incoming WebSocket messages. """
     global latest_prices
-    global price_received
     data = json.loads(message)
 
-    if "p" in data and "s" in data:
-        symbol = data["s"].lower()  # Symbol in lowercase
-        latest_prices[symbol] = float(data["p"])  # Updates the latest price
-        price_received[symbol] = True
-        #print(f"Price data for {symbol.upper()} received.") # For debugging
+    if "data" in data and "p" in data["data"] and "s" in data["data"]:
+        symbol = data["data"]["s"].lower()
+        latest_prices[symbol] = float(data["data"]["p"])
+        # print(f"Price update: {symbol.upper()} - {latest_prices[symbol]}")  # Debugging print
 
-def on_open(ws, symbol):
-    """ Sends the subscription request for the correct symbol. """
+def on_open(ws):
+    """ Subscribes to all configured symbols when the WebSocket connection opens. """
     payload = {
         "method": "SUBSCRIBE",
-        "params": [f"{symbol}@trade"],
+        "params": [f"{symbol}@trade" for symbol in latest_prices.keys()],
         "id": 1
     }
     ws.send(json.dumps(payload))
-    print(f"WebSocket Subscription Sent for {symbol.upper()}")
-    global price_received
-    price_received[symbol.lower()] = False  # Reset flag when connection opens
+    print(f"WebSocket Subscription Sent for: {', '.join(latest_prices.keys())}")
 
 def on_close(ws, close_status_code, close_msg):
-    print("WebSocket closed")
+    """ Handles WebSocket disconnection and attempts to reconnect. """
+    print("WebSocket closed. Reconnecting in 5 seconds...")
+    time.sleep(5)
+    start_websocket(SYMBOLS)  # Restart WebSocket
 
 def on_error(ws, error):
+    """ Handles WebSocket errors. """
     print(f"WebSocket Error: {error}")
 
 def get_latest_price(symbol):
-    """ Returns the latest price received from WebSocket for a specific symbol. """
+    """ Returns the latest price for a given symbol. """
     return latest_prices.get(symbol.lower())
 
-def start_websocket(symbol):
-    """ Starts the WebSocket for the given symbol in a separate thread and waits for price data. """
+def start_websocket(symbols):
+    """Starts a WebSocket connection to Binance for the given symbols."""
+    global ws
     global price_received
-    price_received[symbol.lower()] = False  # Initialize flag for this symbol
+    global latest_prices
+
+    if isinstance(symbols, str):  # Convert single symbol to a list
+        symbols = [symbols]
+
+    # Update SYMBOLS-list
+    global SYMBOLS
+    SYMBOLS = symbols
+
+    # Define latest_prices and price_received
+    latest_prices.update({symbol.lower(): None for symbol in symbols})
+    price_received.update({symbol.lower(): False for symbol in symbols})
+
+    stream_name = "/".join([f"{symbol.lower()}@trade" for symbol in symbols])
+    url = f"wss://fstream.binance.com/stream?streams={stream_name}"
 
     def run():
+        global ws
         ws = websocket.WebSocketApp(
-            f"wss://fstream.binance.com/ws/{symbol}@trade",
+            url,
             on_message=on_message,
-            on_open=lambda ws: on_open(ws, symbol),
+            on_open=on_open,
             on_close=on_close,
             on_error=on_error
         )
@@ -60,25 +85,22 @@ def start_websocket(symbol):
     thread = Thread(target=run, daemon=True)
     thread.start()
 
-    # Wait for price data with a timeout
-    timeout = 5  # seconds
-    start_time = time.time()
-    while not price_received.get(symbol.lower(), False):
-        if time.time() - start_time > timeout:
-            print(f"Timeout waiting for price data for {symbol.upper()}")
-            break
-        time.sleep(0.1)  # Small sleep to not overload CPU
-
-# Handling Ctrl+C
+# Handle Ctrl+C to close WebSocket safely
 def signal_handler(sig, frame):
+    """ Handles SIGINT (Ctrl+C) to gracefully stop WebSocket. """
     print("Ctrl+C detected, closing WebSocket...")
     stop_ws()
     exit(0)
 
 def stop_ws():
+    """ Closes the WebSocket connection. """
     global ws
     if ws:
         ws.close()
         print("WebSocket Closed Manually")
 
 signal.signal(signal.SIGINT, signal_handler)
+
+# Start WebSocket automatically on script execution
+if __name__ == "__main__":
+    start_websocket()
