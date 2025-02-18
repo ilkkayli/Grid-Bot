@@ -35,6 +35,7 @@ def process_symbol(symbol, params, previous_settings, api_key, api_secret):
     working_type = params.get("working_type")
     progressive_grid = params.get("progressive_grid", "False").lower() == "true"
     grid_progression = params.get("grid_progression")
+    use_websocket = True # True if use websocket, else False for API calls
 
     set_leverage_if_needed(symbol, leverage, api_key, api_secret)
 
@@ -45,7 +46,8 @@ def process_symbol(symbol, params, previous_settings, api_key, api_secret):
         working_type=working_type,
         leverage=leverage,
         progressive_grid=progressive_grid,
-        grid_progression=grid_progression
+        grid_progression=grid_progression,
+        use_websocket=use_websocket
     )
 
 def main_loop():
@@ -62,6 +64,8 @@ def main_loop():
     if not get_open_orders:
         clear_orders_file()
 
+    start_websocket(list(active_symbols))
+
     previous_settings = {}
 
     while True:
@@ -73,7 +77,6 @@ def main_loop():
         active_symbols = update_active_symbols(current_symbols, active_symbols, api_key, api_secret)
 
         for symbol, params in crypto_settings.items():
-            start_websocket(symbol.lower())
             process_symbol(symbol, params, previous_settings, api_key, api_secret)
 
         time.sleep(10)
