@@ -5,7 +5,6 @@ import time
 import sys
 from logging_config import logger
 from file_utils import load_json
-import os
 
 # Fetch settings
 secrets = load_json("secrets.json")
@@ -449,7 +448,7 @@ def set_leverage_if_needed(symbol, leverage, api_key, api_secret):
         print(f"Leverage for {symbol} set to {leverage}x successfully.")
         return result
     except requests.exceptions.HTTPError as e:
-        print(f"Failed to set leverage for {symbol}: {e}.")
+        print(f"Failed to set leverage for {symbol}.")
         return None
     except Exception as e:
         print(f"Unhandled error while setting leverage for {symbol}: {e}")
@@ -498,13 +497,8 @@ def handle_binance_error(error, symbol, api_key, api_secret):
     print(f"Binance API Error: {error_code} - {error_message}")
 
     # Fetch all symbols from config.json
-    config = load_json("config.json")
     crypto_settings = config.get("crypto_settings", {})
-
-    symbols = set(crypto_settings.keys())
-
-    #crypto_settings = config.get("crypto_settings", {})
-    #symbols = [settings["symbol"] for settings in crypto_settings.values()]
+    symbols = [settings["symbol"] for settings in crypto_settings.values()]
 
     # Handle different error codes
     if error_code == -1021:  # Timestamp error
@@ -530,12 +524,7 @@ def handle_binance_error(error, symbol, api_key, api_secret):
                 logger.error(f"Error while resetting grid for {active_symbol}: {e}")
                 print(f"Error while resetting grid for {active_symbol}: {e}")
 
-        # Shutdown the bot safely
-        print("Bot stopping due to insufficient margin.")
-        try:
-            sys.exit(1)  # Shutting down the bot, if in main thread
-        except SystemExit:
-            os._exit(1)  # Forced stop
+        sys.exit("Bot stopped due to insufficient margin.")
 
     elif error_code == 400:  # Bad Request
         message = f"{symbol} Bad Request error detected. Checking symbol validity and resetting grid if necessary..."
@@ -558,6 +547,7 @@ def handle_binance_error(error, symbol, api_key, api_secret):
     else:
         message = f"{symbol} Unhandled error ({error_code}): {error_message}. Closing positions and resetting grid as a precaution"
         log_and_print(message)
+        reset_grid(symbol, api_key, api_secret)
         return
 
 def get_step_size(symbol, api_key, api_secret):
@@ -579,7 +569,7 @@ def get_step_size(symbol, api_key, api_secret):
         print(f"Error fetching Futures step size: {e}")
         return None
 
-def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=0.3, min_spacing=0.0001):
+def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=0.3, min_spacing=0.0001, min_percentage=0.003):
     """
     Calculates the dynamic base_spacing value based on the amplitude of the last three 4-hour candles.
 
@@ -587,16 +577,17 @@ def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=0.3, 
         symbol (str): Trading pair, e.g., "VINEUSDT".
         api_key (str): API key.
         api_secret (str): API secret.
-        multiplier (float, optional): Multiplier for scaling the spacing. Default is 2.
-        min_spacing (float, optional): Minimum spacing value. Default is 0.0001.
+        multiplier (float, optional): Multiplier for scaling the spacing. Default is 0.3.
+        min_spacing (float, optional): Absolute minimum spacing value. Default is 0.0001.
+        min_percentage (float, optional): Minimum spacing as a percentage of the latest price. Default is 0.3% (0.003).
 
     Returns:
         float: Calculated base_spacing or default value.
 
-    Default spacing if data retrieval fails. Default is 0.007 (0.7%).
+    Default spacing if data retrieval fails: 0.007 (0.7%).
     """
-    default_spacing=0.007
-
+    default_spacing = 0.007
+    base_url = "https://fapi.binance.com"  # Binance Futures API base URL
     endpoint = "/fapi/v1/klines"
     params = {
         "symbol": symbol.upper(),
@@ -610,7 +601,6 @@ def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=0.3, 
         candles = response.json()
 
         amplitudes = []
-
         for candle in candles:
             high = float(candle[2])
             low = float(candle[3])
@@ -623,10 +613,12 @@ def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=0.3, 
             return default_spacing
 
         avg_amplitude = sum(amplitudes) / len(amplitudes)
-
-        # Apply the average amplitude to the latest price and scale
         latest_price = float(candles[-1][4])  # Latest closing price
+
+        # Compute dynamic spacing and enforce minimum percentage rule
         dynamic_base_spacing = max(avg_amplitude * multiplier * latest_price, min_spacing)
+        min_allowed_spacing = latest_price * min_percentage
+        dynamic_base_spacing = max(dynamic_base_spacing, min_allowed_spacing)
 
         logger.info(f"Symbol: {symbol}, Avg Amplitude: {avg_amplitude:.5f}, Base Spacing: {dynamic_base_spacing:.8f}")
         return dynamic_base_spacing
