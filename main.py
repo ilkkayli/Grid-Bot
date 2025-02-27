@@ -1,6 +1,6 @@
 import time
 from order_management import handle_grid_orders, get_open_orders, reset_grid, clear_orders_file
-from binance_futures import set_leverage_if_needed
+from binance_futures import set_leverage_if_needed, calculate_bot_trigger
 from file_utils import load_json
 from binance_websockets import start_websocket
 
@@ -17,10 +17,11 @@ def update_active_symbols(current_symbols, active_symbols, api_key, api_secret):
 
 def process_symbol(symbol, params, previous_settings, api_key, api_secret):
     """
-    Process a single symbol: check parameters, reset grid if needed, and manage orders.
+    Process a single symbol: check parameters, reset grid if needed, and manage orders based on BB trigger.
     """
     print("-----------------------------")
     print(f"Processing symbol: {symbol}")
+    
     if symbol in previous_settings and params != previous_settings[symbol]:
         print(f"Parameters changed for {symbol}. Resetting grid...")
         reset_grid(symbol, api_key, api_secret)
@@ -35,7 +36,16 @@ def process_symbol(symbol, params, previous_settings, api_key, api_secret):
     working_type = params.get("working_type")
     progressive_grid = params.get("progressive_grid", "False").lower() == "true"
     grid_progression = params.get("grid_progression")
-    use_websocket = True # True if use websocket, else False for API calls
+    use_websocket = False
+
+    # Tarkista Bollinger Bands -triggeröinti
+    trigger_result = calculate_bot_trigger(symbol, api_key, api_secret)
+    print(trigger_result['message'])
+    
+    if not trigger_result['start_bot']:
+        print(f"Stopping {symbol}: Resetting grid and waiting for new entry conditions.")
+        reset_grid(symbol, api_key, api_secret)
+        return
 
     set_leverage_if_needed(symbol, leverage, api_key, api_secret)
 
