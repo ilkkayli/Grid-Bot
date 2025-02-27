@@ -5,6 +5,9 @@ import time
 import sys
 from logging_config import logger
 from file_utils import load_json
+import pandas as pd
+import numpy as np
+
 
 # Fetch settings
 secrets = load_json("secrets.json")
@@ -620,7 +623,7 @@ def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=0.3, 
         min_allowed_spacing = latest_price * min_percentage
         dynamic_base_spacing = max(dynamic_base_spacing, min_allowed_spacing)
 
-        logger.info(f"Symbol: {symbol}, Avg Amplitude: {avg_amplitude:.5f}, Base Spacing: {dynamic_base_spacing:.8f}")
+        #logger.info(f"Symbol: {symbol}, Avg Amplitude: {avg_amplitude:.5f}, Base Spacing: {dynamic_base_spacing:.8f}")
         return dynamic_base_spacing
 
     except requests.exceptions.HTTPError as e:
@@ -634,3 +637,76 @@ def calculate_dynamic_base_spacing(symbol, api_key, api_secret, multiplier=0.3, 
 def log_and_print(message):
     print(message)
     logger.info(message)
+
+def calculate_bot_trigger(symbol, api_key, api_secret, bb_period=20, bbw_threshold=0.05, candle_size_multiplier=1.5, min_candles=5):
+    base_url = "https://fapi.binance.com"
+    endpoint = "/fapi/v1/klines"
+    params = {
+        "symbol": symbol.upper(),
+        "interval": "4h",
+        "limit": bb_period + max(min_candles, 10)
+    }
+
+    try:
+        response = requests.get(base_url + endpoint, params=params)
+        response.raise_for_status()
+        candles = response.json()
+
+        if len(candles) < bb_period:
+            logger.warning(f"Insufficient candles ({len(candles)}) for {symbol}.")
+            return {'start_bot': False, 'message': f"Insufficient data: {len(candles)} candles."}
+
+        df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time',
+                                            'quote_asset_volume', 'trades', 'taker_buy_base', 'taker_buy_quote', 'ignore'])
+        df = df.astype(float)
+
+        # Bollinger Bands
+        df['SMA'] = df['close'].rolling(window=bb_period, min_periods=bb_period).mean()
+        df['SD'] = df['close'].rolling(window=bb_period, min_periods=bb_period).std()
+        df['UpperBand'] = df['SMA'] + (2 * df['SD'])
+        df['LowerBand'] = df['SMA'] - (2 * df['SD'])
+        df['BBW'] = np.where(df['SMA'] > 0, (df['UpperBand'] - df['LowerBand']) / df['SMA'], np.nan)
+
+        latest_bbw = df['BBW'].iloc[-1]
+        if pd.isna(latest_bbw):
+            logger.warning(f"BBW NaN for {symbol}.")
+            return {'start_bot': False, 'message': "BBW calculation failed."}
+
+        latest_close = df['close'].iloc[-1]
+        latest_upper = df['UpperBand'].iloc[-1]
+        latest_lower = df['LowerBand'].iloc[-1]
+        candle_outside_bb = latest_close > latest_upper or latest_close < latest_lower
+
+        # Kynttilän koko
+        df['CandleSize'] = df['high'] - df['low']
+        latest_candle_size = df['CandleSize'].iloc[-1]
+        avg_candle_size = df['CandleSize'].iloc[-min_candles-1:-1].mean()
+        candle_size_deviation = latest_candle_size / avg_candle_size if avg_candle_size > 0 else None
+
+        # Päätöslogiikka
+        if latest_bbw > bbw_threshold:
+            decision = False
+            message = f"BBW ({latest_bbw:.4f}) exceeds threshold ({bbw_threshold}). Stop bot."
+        elif candle_outside_bb and (candle_size_deviation is not None and candle_size_deviation > candle_size_multiplier):
+            decision = False
+            message = f"Candle outside BB and size deviation ({candle_size_deviation:.2f}x) exceeds {candle_size_multiplier}x. Stop bot."
+        elif candle_outside_bb:
+            decision = False
+            message = "Candle outside BB. Stop bot."
+        else:
+            decision = True
+            message = "BBW narrow and candle inside BB. Start bot."
+
+        #logger.info(f"{symbol}: {message} | BBW={latest_bbw:.4f}, Upper={latest_upper:.2f}, Lower={latest_lower:.2f}, SMA={df['SMA'].iloc[-1]:.2f}, Close={latest_close:.2f}")
+        print(f"{symbol}: {message} | BBW={latest_bbw:.4f}, Upper={latest_upper:.2f}, Lower={latest_lower:.2f}, SMA={df['SMA'].iloc[-1]:.2f}, Close={latest_close:.2f}")
+        return {
+            'start_bot': decision,
+            'bbw': latest_bbw,
+            'candle_outside_bb': candle_outside_bb,
+            'candle_size_deviation': candle_size_deviation,
+            'message': message
+        }
+
+    except Exception as e:
+        logger.error(f"Error for {symbol}: {e}")
+        return {'start_bot': False, 'message': "Data fetch failed. Stop bot by default."}
