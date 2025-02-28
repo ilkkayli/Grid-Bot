@@ -1,27 +1,20 @@
 import time
 from order_management import handle_grid_orders, get_open_orders, reset_grid, clear_orders_file
-from binance_futures import set_leverage_if_needed, calculate_bot_trigger
+from binance_futures import set_leverage_if_needed, calculate_bot_trigger, log_and_print
 from file_utils import load_json
 from binance_websockets import start_websocket
 
 def update_active_symbols(current_symbols, active_symbols, api_key, api_secret):
-    """
-    Update the active symbols list by removing symbols no longer in the configuration.
-    Reset grids for removed symbols.
-    """
     removed_symbols = active_symbols - current_symbols
     for symbol in removed_symbols:
         print(f"Symbol {symbol} was removed from the configuration. Resetting its grid...")
         reset_grid(symbol, api_key, api_secret)
     return current_symbols
 
-def process_symbol(symbol, params, previous_settings, api_key, api_secret):
-    """
-    Process a single symbol: check parameters, reset grid if needed, and manage orders based on BB trigger.
-    """
+def process_symbol(symbol, params, previous_settings, previous_bot_states, api_key, api_secret):
     print("-----------------------------")
     print(f"Processing symbol: {symbol}")
-    
+
     if symbol in previous_settings and params != previous_settings[symbol]:
         print(f"Parameters changed for {symbol}. Resetting grid...")
         reset_grid(symbol, api_key, api_secret)
@@ -38,13 +31,23 @@ def process_symbol(symbol, params, previous_settings, api_key, api_secret):
     grid_progression = params.get("grid_progression")
     use_websocket = False
 
-    # Tarkista Bollinger Bands -triggeröinti
+    # Check Bollinger Bands -triggering
     trigger_result = calculate_bot_trigger(symbol, api_key, api_secret)
     print(trigger_result['message'])
-    
-    if not trigger_result['start_bot']:
-        print(f"Stopping {symbol}: Resetting grid and waiting for new entry conditions.")
+
+    previous_state = previous_bot_states.get(symbol, False)
+
+    current_state = trigger_result['start_bot']
+    previous_bot_states[symbol] = current_state
+
+    # Reset grid only when changing from running state (True) to idle (False)
+    if previous_state and not current_state:
+        message = f"Stopping {symbol}: Resetting grid and waiting for new entry conditions."
+        log_and_print(message)
         reset_grid(symbol, api_key, api_secret)
+        return
+    elif not current_state:
+        print(f"Bot for {symbol} remains stopped. No grid reset needed.")
         return
 
     set_leverage_if_needed(symbol, leverage, api_key, api_secret)
@@ -61,9 +64,6 @@ def process_symbol(symbol, params, previous_settings, api_key, api_secret):
     )
 
 def main_loop():
-    """
-    Main execution loop for the grid bot.
-    """
     config = load_json("config.json")
     secrets = load_json("secrets.json")
     api_key = secrets.get("api_key")
@@ -77,6 +77,7 @@ def main_loop():
     start_websocket(list(active_symbols))
 
     previous_settings = {}
+    previous_bot_states = {}
 
     while True:
         print("Starting a new loop...")
@@ -87,9 +88,9 @@ def main_loop():
         active_symbols = update_active_symbols(current_symbols, active_symbols, api_key, api_secret)
 
         for symbol, params in crypto_settings.items():
-            process_symbol(symbol, params, previous_settings, api_key, api_secret)
+            process_symbol(symbol, params, previous_settings, previous_bot_states, api_key, api_secret)
 
-        time.sleep(10)
+        time.sleep(15)
 
 if __name__ == "__main__":
     main_loop()
