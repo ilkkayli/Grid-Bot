@@ -2,7 +2,7 @@
 
 ***Note: Use this bot at your own risk. We strongly recommend thoroughly testing your strategy in Binance's test environment before deploying it in live markets. Trading in leveraged environments can be highly volatile, and improper configuration may result in significant losses.***
 
-This Grid Bot is a trading algorithm designed for Binance futures, capable of executing grid trading strategies by automatically placing buy and sell orders in a grid pattern. The bot captures profits from price fluctuations within a specified range.
+This Grid Bot is a trading algorithm designed for Binance futures, capable of executing grid trading strategies by automatically placing buy and sell orders in a grid pattern. The bot captures profits from price fluctuations within a specified range. The bot monitors price movements and volume, searching for a suitable entry opportunity. During excessive price fluctuations, the bot remains idle, and once the price consolidates, it activates itself.
 
 ## Features
 
