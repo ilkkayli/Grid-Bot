@@ -1,8 +1,8 @@
 import json
 import os
-from binance_futures import get_open_orders, get_tick_size,place_limit_order, reset_grid, get_open_positions, log_and_print, get_step_size, calculate_dynamic_base_spacing, get_market_price
+from binance_futures import get_open_orders, get_tick_size,place_limit_order, reset_grid, get_open_positions, log_and_print, get_step_size, calculate_dynamic_base_spacing, get_market_price, open_trailing_stop_order, place_market_order
 from file_utils import load_json
-from binance_websockets import get_latest_price
+#from binance_websockets import get_latest_price
 
 # Fetch settings
 secrets = load_json("secrets.json")
@@ -103,14 +103,11 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
         print("Error: Could not retrieve tick size.")
         return
 
-    print(f"Tick size: {tick_size}")
-
     # Retrieve step size for the trading pair
     step_size = get_step_size(symbol, api_key, api_secret)
     if step_size is None:
         print("Error: Could not retrieve step size.")
         return
-    print(f"Step size: {step_size}")
 
     # Calculate base grid_spacing
     base_spacing = calculate_dynamic_base_spacing(symbol, api_key, api_secret)
@@ -139,7 +136,6 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
 
     if not open_orders:
         # If there are no open orders, create new grid orders
-        # Neutral mode: orders on both sides of the market price
         print(f"Grid progression:  {progressive_grid}")
         for level in range(1, grid_levels + 1):
 
@@ -161,7 +157,6 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
             sell_price = round_to_tick_size(market_price + (level * sell_spacing), tick_size)
 
             print(f"Market Price: {market_price}, Buy Price: {buy_price}, Sell Price: {sell_price}")
-            print(f"TICK SIZE: {tick_size}")
 
             # Placing BUY orders
             print(f"Placing BUY order at {buy_price}")
@@ -262,7 +257,8 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     and order['side'] == new_side
                     for order in open_orders
                 ):
-                    print(f"{new_side} order already exists at {new_order_price} within tolerance range.")
+                    message = f"{new_side} order already exists at {new_order_price} within tolerance range. Skipping order replacement."
+                    log_and_print(message)
                     continue
 
                 # Place new order
@@ -284,30 +280,14 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                         'side': new_side,
                         'quantity': previous_order['quantity']
                     })
+                    message = f"{symbol} Placed a new replacement order {new_side} at {new_order_price}."
+                    log_and_print(message)
                 else:
                     print(f"Error placing new order at {new_order_price}")
                     break
 
-        # Check if the grid needs to be reset when price exceeds a certain threshold
-        # Extract the lowest buy and highest sell order price from limit_orders
-        lowest_buy_order_price = limit_orders.get('lowest_buy_order_price')
-        highest_sell_order_price = limit_orders.get('highest_sell_order_price')
-
         # Debug
         #print(f"Market price: {market_price}, Lowest Buy Order Price: {lowest_buy_order_price}, Highest Sell Order Price: {highest_sell_order_price}, Base spacing: {base_spacing}")
-
-        # Stop-loss-check
-        if lowest_buy_order_price is not None and market_price < lowest_buy_order_price - (base_spacing * 1.5 + tolerance):
-            message = f"{symbol} Market price dropped too far below the lowest buy order. Performing stop-loss."
-            log_and_print(message)
-            reset_grid(symbol, api_key, api_secret)
-            return
-
-        if highest_sell_order_price is not None and market_price > highest_sell_order_price + (base_spacing * 1.5 + tolerance):
-            message = f"{symbol} Market price rose too far above the highest sell order. Performing stop-loss."
-            log_and_print(message)
-            reset_grid(symbol, api_key, api_secret)
-            return
 
     # Save updated orders and preserve original limit_orders
     data_to_save = {
@@ -315,3 +295,68 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
         "limit_orders": limit_orders
     }
     save_open_orders_to_file(symbol, data_to_save)
+
+def handle_breakout_strategy(symbol, trigger_result, order_quantity, trailing_stop_rate, api_key, api_secret, working_type, active_breakouts):
+    """
+    Handle breakout strategy: open market order and set trailing stop if conditions met.
+
+    Args:
+        symbol (str): Trading pair (e.g., "BTCUSDC").
+        trigger_result (dict): Result from calculate_bot_trigger (contains 'strategy').
+        order_quantity (float): Quantity for market order.
+        trailing_stop_rate (float): Trailing stop callback rate (e.g., 1.0 for 1%).
+        api_key (str): Binance API key.
+        api_secret (str): Binance API secret.
+        working_type (str): Order working type (e.g., "CONTRACT_PRICE").
+        active_breakouts (dict): Dictionary tracking active breakout positions.
+    """
+    if trigger_result['strategy'] not in ['breakout_long', 'breakout_short']:
+        return
+
+    # Tarkista, onko breakout aktiivinen ja positio yhä auki
+    if symbol in active_breakouts:
+        open_positions = get_open_positions(symbol, api_key, api_secret)
+        if not open_positions:
+            log_and_print(f"Position closed for {symbol}. Removing from active_breakouts.")
+            del active_breakouts[symbol]
+        else:
+            log_and_print(f"Breakout already active for {symbol}, skipping new position.")
+            return
+
+    # Breakout-long
+    if trigger_result['strategy'] == 'breakout_long':
+        print(f"Initiating long position for {symbol}.")
+        market_order = place_market_order(symbol, "BUY", order_quantity, api_key, api_secret)
+        if market_order:
+            log_and_print(f"{symbol} Breakout long opened: {market_order}.")
+            trailing_stop = open_trailing_stop_order(
+                symbol=symbol, side="SELL", quantity=order_quantity,
+                callback_rate=trailing_stop_rate, api_key=api_key, api_secret=api_secret, working_type=working_type
+            )
+            if trailing_stop:
+                log_and_print(f"{symbol} Trailing stop set for long: {trailing_stop}.")
+                active_breakouts[symbol] = 'long'
+            else:
+                log_and_print(f"Failed to set trailing stop for {symbol}. Closing position.")
+                place_market_order(symbol, "SELL", order_quantity, api_key, api_secret)
+        else:
+            log_and_print(f"Failed to open long position for {symbol}.")
+
+    # Breakout-short
+    elif trigger_result['strategy'] == 'breakout_short':
+        print(f"Initiating short position for {symbol}.")
+        market_order = place_market_order(symbol, "SELL", order_quantity, api_key, api_secret)
+        if market_order:
+            log_and_print(f"{symbol} Short position opened: {market_order}")
+            trailing_stop = open_trailing_stop_order(
+                symbol=symbol, side="BUY", quantity=order_quantity,
+                callback_rate=trailing_stop_rate, api_key=api_key, api_secret=api_secret, working_type=working_type
+            )
+            if trailing_stop:
+                log_and_print(f"{symbol} Trailing stop set for short: {trailing_stop}")
+                active_breakouts[symbol] = 'short'
+            else:
+                log_and_print(f"Failed to set trailing stop for {symbol}. Closing position.")
+                place_market_order(symbol, "BUY", order_quantity, api_key, api_secret)
+        else:
+            log_and_print(f"Failed to open short position for {symbol}.")
