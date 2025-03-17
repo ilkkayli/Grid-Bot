@@ -343,6 +343,32 @@ def place_market_order(symbol, side, quantity, api_key, api_secret):
         print(f"Error placing market order: {e}")
         return None
 
+def open_trailing_stop_order(symbol, side, quantity, callback_rate, api_key, api_secret, working_type):
+    endpoint = '/fapi/v1/order'
+    timestamp = int(time.time() * 1000)
+    params = {
+        'symbol': symbol,
+        'side': side,
+        'type': 'TRAILING_STOP_MARKET',
+        'quantity': abs(round(quantity, 3)),  # Ensure quantity is positive and round to 3 decimal places
+        'callbackRate': callback_rate,
+        'timestamp': timestamp,
+        'workingType': working_type
+    }
+
+    query_string = '&'.join([f"{key}={value}" for key, value in params.items()])
+    signature = create_signature(query_string, api_secret)  # Create a signature
+    params['signature'] = signature
+
+    headers = {
+        'X-MBX-APIKEY': api_key
+    }
+
+    response = requests.post(base_url + endpoint, headers=headers, data=params)
+    print(f"Trailing stop order response: {response.json()}")
+    logger.info(f"Trailing stop order response: {response.json()}")
+    return response.json()
+
 def close_open_positions(symbol, api_key, api_secret):
     """
     Closes all open positions for a given symbol.
@@ -638,14 +664,44 @@ def log_and_print(message):
     print(message)
     logger.info(message)
 
-def calculate_bot_trigger(symbol, api_key, api_secret, bb_period=20, bbw_threshold=0.05, candle_size_multiplier=1.5, min_candles=5):
+def calculate_bot_trigger(symbol, api_key, api_secret, bbw_threshold, klines_interval, bb_period=20, candle_size_multiplier=1.5, min_candles=5):
+    '''
+    Analyzes Bollinger Bands (BB) and determines whether to start the trading bot
+    with a grid strategy or switch to a breakout strategy.
+
+    Args:
+        symbol (str): Trading pair, e.g., "BTCUSDT".
+        bb_period (int): Number of periods for Bollinger Bands calculation.
+        bbw_threshold (float): BBW (Bollinger Band Width) threshold for stopping the bot (see config.json).
+        klines_interval (str): eg. 1h or 4h so on defines the candlestick data being used (see config.json).
+        candle_size_multiplier (float): Multiplier for detecting abnormal candle size deviations.
+        min_candles (int): Minimum number of candles required for analyzing average candle size.
+
+    Returns:
+        dict: Analysis result containing:
+            - 'start_bot' (bool): Whether the grid bot should start.
+            - 'strategy' (str): Selected strategy ('grid', 'breakout_long', 'breakout_short', or 'none').
+            - 'bbw' (float): Latest Bollinger Band Width value.
+            - 'candle_outside_bb' (bool): Whether the latest candle is outside Bollinger Bands.
+            - 'candle_size_deviation' (float or None): Latest candle size deviation from the average.
+            - 'message' (str): Explanation of the decision.
+
+    Decision Logic:
+        - If BBW exceeds the threshold:
+            - If the latest candle is outside BB, use a breakout strategy.
+            - Otherwise, stop the bot.
+        - If the latest candle is outside BB and its size deviation is abnormally high, use a breakout strategy.
+        - If the latest candle is outside BB without a strong size deviation, use a breakout strategy.
+        - Otherwise, start the bot with a grid strategy.
+
+    Fetches the latest candlestick data from Binance Futures API and calculates:
+        - Bollinger Bands (SMA, Upper/Lower bands, BBW)
+        - Latest candle size and its deviation from the average
+        - Determines if the latest price is outside Bollinger Bands
+    '''
     base_url = "https://fapi.binance.com"
     endpoint = "/fapi/v1/klines"
-    params = {
-        "symbol": symbol.upper(),
-        "interval": "4h",
-        "limit": bb_period + max(min_candles, 10)
-    }
+    params = {"symbol": symbol.upper(), "interval": klines_interval, "limit": bb_period + max(min_candles, 10)}
 
     try:
         response = requests.get(base_url + endpoint, params=params)
@@ -654,13 +710,12 @@ def calculate_bot_trigger(symbol, api_key, api_secret, bb_period=20, bbw_thresho
 
         if len(candles) < bb_period:
             logger.warning(f"Insufficient candles ({len(candles)}) for {symbol}.")
-            return {'start_bot': False, 'message': f"Insufficient data: {len(candles)} candles."}
+            return {'start_bot': False, 'strategy': 'none', 'message': f"Insufficient data: {len(candles)} candles."}
 
         df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'close_time',
                                             'quote_asset_volume', 'trades', 'taker_buy_base', 'taker_buy_quote', 'ignore'])
         df = df.astype(float)
 
-        # Bollinger Bands
         df['SMA'] = df['close'].rolling(window=bb_period, min_periods=bb_period).mean()
         df['SD'] = df['close'].rolling(window=bb_period, min_periods=bb_period).std()
         df['UpperBand'] = df['SMA'] + (2 * df['SD'])
@@ -670,37 +725,56 @@ def calculate_bot_trigger(symbol, api_key, api_secret, bb_period=20, bbw_thresho
         latest_bbw = df['BBW'].iloc[-1]
         if pd.isna(latest_bbw):
             logger.warning(f"BBW NaN for {symbol}.")
-            return {'start_bot': False, 'message': "BBW calculation failed."}
+            return {'start_bot': False, 'strategy': 'none', 'message': "BBW calculation failed."}
 
         latest_close = df['close'].iloc[-1]
         latest_upper = df['UpperBand'].iloc[-1]
         latest_lower = df['LowerBand'].iloc[-1]
-        candle_outside_bb = latest_close > latest_upper or latest_close < latest_lower
+        # candle_outside_bb = latest_close > latest_upper or latest_close < latest_lower
+        bb_tolerance = 0.003  # 0.3 %
+        if not df[['close', 'UpperBand', 'LowerBand']].iloc[-1].isnull().any():
+            candle_outside_bb = float(df['close'].iloc[-1]) > (float(df['UpperBand'].iloc[-1]) * (1 + bb_tolerance)) or float(df['close'].iloc[-1]) < (float(df['LowerBand'].iloc[-1]) * (1 - bb_tolerance))
+        else:
+            candle_outside_bb = False # Tai joku muu fallback-arvo
 
-        # Kynttilän koko
         df['CandleSize'] = df['high'] - df['low']
         latest_candle_size = df['CandleSize'].iloc[-1]
         avg_candle_size = df['CandleSize'].iloc[-min_candles-1:-1].mean()
         candle_size_deviation = latest_candle_size / avg_candle_size if avg_candle_size > 0 else None
 
-        # Päätöslogiikka
+        breakout_direction = None
+        if candle_outside_bb:
+            if latest_close > latest_upper:
+                breakout_direction = 'breakout_long'
+            elif latest_close < latest_lower:
+                breakout_direction = 'breakout_short'
+
         if latest_bbw > bbw_threshold:
+            if breakout_direction:
+                decision = False
+                strategy = breakout_direction
+                message = f"BBW ({latest_bbw:.4f}) exceeds threshold ({bbw_threshold}). {breakout_direction.replace('_', ' ').title()}."
+            else:
+                decision = False
+                strategy = 'none'
+                message = f"BBW ({latest_bbw:.4f}) exceeds threshold ({bbw_threshold}). Stop bot."
+        elif breakout_direction and (candle_size_deviation is not None and candle_size_deviation > candle_size_multiplier):
             decision = False
-            message = f"BBW ({latest_bbw:.4f}) exceeds threshold ({bbw_threshold}). Stop bot."
-        elif candle_outside_bb and (candle_size_deviation is not None and candle_size_deviation > candle_size_multiplier):
+            strategy = breakout_direction
+            message = f"Candle outside BB with size deviation ({candle_size_deviation:.2f}x). {breakout_direction.replace('_', ' ').title()}."
+        elif breakout_direction:
             decision = False
-            message = f"Candle outside BB and size deviation ({candle_size_deviation:.2f}x) exceeds {candle_size_multiplier}x. Stop bot."
-        elif candle_outside_bb:
-            decision = False
-            message = "Candle outside BB. Stop bot."
+            strategy = breakout_direction
+            message = f"Candle outside BB. {breakout_direction.replace('_', ' ').title()}."
         else:
             decision = True
-            message = "BBW narrow and candle inside BB. Start bot."
+            strategy = 'grid'
+            message = "BBW narrow and candle inside BB. Start grid bot."
 
-        #logger.info(f"{symbol}: {message} | BBW={latest_bbw:.4f}, Upper={latest_upper:.2f}, Lower={latest_lower:.2f}, SMA={df['SMA'].iloc[-1]:.2f}, Close={latest_close:.2f}")
         print(f"{symbol}: {message} | BBW={latest_bbw:.4f}, Upper={latest_upper:.2f}, Lower={latest_lower:.2f}, SMA={df['SMA'].iloc[-1]:.2f}, Close={latest_close:.2f}")
         return {
             'start_bot': decision,
+            'strategy': strategy,
             'bbw': latest_bbw,
             'candle_outside_bb': candle_outside_bb,
             'candle_size_deviation': candle_size_deviation,
@@ -709,4 +783,4 @@ def calculate_bot_trigger(symbol, api_key, api_secret, bb_period=20, bbw_thresho
 
     except Exception as e:
         logger.error(f"Error for {symbol}: {e}")
-        return {'start_bot': False, 'message': "Data fetch failed. Stop bot by default."}
+        return {'start_bot': False, 'strategy': 'none', 'message': "Data fetch failed."}
