@@ -7,7 +7,9 @@
       "working_type": "CONTRACT_PRICE",
       "leverage": 75,
       "progressive_grid" : "False",
-      "grid_progression" : 1.1
+      "grid_progression" : 1.1,
+      "bbw_threshold": 0.07,
+      "klines_interval": "1h"
     },
     "SXPUSDT": {
       "symbol": "SXPUSDT",
@@ -16,7 +18,9 @@
       "working_type": "CONTRACT_PRICE",
       "leverage": 75,
       "progressive_grid" : "True",
-      "grid_progression" : 1.1
+      "grid_progression" : 1.5,
+      "bbw_threshold": 0.1,
+      "klines_interval": "4h"
     }
   }
 }
