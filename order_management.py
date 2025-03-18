@@ -78,14 +78,14 @@ def calculate_variable_grid_spacing(level, base_spacing, grid_progression, max_s
         return min(spacing, max_spacing)
     return spacing
 
-# Modified handle_grid_orders function for neutral, long, and short modes
-def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, progressive_grid, grid_progression, use_websocket):
+spacing_cache = {}
 
+def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, progressive_grid, grid_progression, use_websocket):
     # Retrieve current market price
     if use_websocket:
         market_price = get_latest_price(symbol)
         print(f"WebSocket price retrieved {symbol} {market_price}")
-        if market_price is None:  # Fallback to API call if websocket is not respoding
+        if market_price is None:
             print(f"WebSocket price unavailable, fetching from API for {symbol}...")
             market_price = get_market_price(symbol, api_key, api_secret)
     else:
@@ -109,23 +109,13 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
         print("Error: Could not retrieve step size.")
         return
 
-    # Calculate base grid_spacing
-    base_spacing = calculate_dynamic_base_spacing(symbol, api_key, api_secret)
-    print(f"Base grid spacing: {base_spacing}")
-
-    # Define price tolerance (5% of base spacing, adjustable)
-    tolerance = base_spacing * 0.05
-
-    # Fetch current open orders from Binance. If any errors occur, the grid will be reset, and open positions will be closed.
+    # Fetch current open orders from Binance
     open_orders = get_open_orders(symbol, api_key, api_secret)
-
-    # Check for error indication in the response
     if open_orders is None:
         message = f"{symbol} Error detected in open orders response."
         log_and_print(message)
-        return # Abort the loop
+        return
     else:
-        # print(f"Current open orders: {open_orders}") # This is for debugging
         print("Open orders retrieved.")
 
     # Load previous open orders from file
@@ -134,20 +124,32 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
     new_orders = []
     limit_orders = {}
 
-    if not open_orders:
-        # If there are no open orders, create new grid orders
-        print(f"Grid progression:  {progressive_grid}")
-        for level in range(1, grid_levels + 1):
+    # Retrieve or calculate base_spacing from cache
+    if symbol not in spacing_cache:
+        base_spacing = calculate_dynamic_base_spacing(symbol, api_key, api_secret)
+        if base_spacing is None:
+            print(f"Error: Could not calculate base spacing for {symbol}.")
+            return
+        spacing_cache[symbol] = base_spacing
+        print(f"Base grid spacing calculated and cached: {base_spacing}")
+    else:
+        base_spacing = spacing_cache[symbol]
+        print(f"Base grid spacing retrieved from cache: {base_spacing}")
 
-            if progressive_grid == True:
-                # Calculate variable spacing if progressive_grid flag is True
+    # Define price tolerance (5% of base spacing, adjustable)
+    tolerance = base_spacing * 0.05
+
+    if not open_orders:
+        # Create new grid orders
+        print(f"Grid progression: {progressive_grid}")
+        for level in range(1, grid_levels + 1):
+            if progressive_grid:
                 buy_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression)
                 sell_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression)
                 print(f"Variable Spacing for BUY: {buy_spacing}, SELL: {sell_spacing}")
                 order_quantity_adjusted = round_to_step_size(order_quantity * (grid_progression ** (level - 1)), step_size)
                 print(f"Adjusted Order Quantity: {order_quantity_adjusted}")
             else:
-                # Use fixed spacing if progressive_grid flag is False
                 buy_spacing = sell_spacing = base_spacing
                 order_quantity_adjusted = round_to_step_size(order_quantity, step_size)
                 print(f"Fixed Spacing: {base_spacing}")
@@ -163,13 +165,10 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
             buy_order = place_limit_order(
                 symbol, 'BUY', order_quantity_adjusted, buy_price, api_key, api_secret, 'LONG', working_type
             )
-
-            # Check if buy order was successfully placed
             if buy_order is None:
                 print(f"Error placing BUY order at {buy_price}. Skipping to the next iteration.")
-                break  # Stop processing this symbol's grid and exit the loop
+                break
             elif 'orderId' in buy_order:
-                # Save order details, including quantity
                 new_orders.append({
                     'orderId': buy_order['orderId'],
                     'price': buy_price,
@@ -180,20 +179,17 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 print(f"BUY Order Placed Successfully: {buy_order['orderId']}, Quantity: {order_quantity_adjusted}")
             else:
                 print(f"Error placing BUY order at {buy_price}. Unexpected API response: {buy_order}")
-                break  # Stop processing this symbol's grid due to an unexpected response
+                break
 
             # Placing SELL orders
             print(f"Placing SELL order at {sell_price}")
             sell_order = place_limit_order(
                 symbol, 'SELL', order_quantity_adjusted, sell_price, api_key, api_secret, 'SHORT', working_type
             )
-
-            # Check if SELL order was successfully placed
             if sell_order is None:
                 print(f"Error placing SELL order at {sell_price}. Stopping grid creation for {symbol}.")
-                break  # Stop processing this symbol's grid
+                break
             elif 'orderId' in sell_order:
-                # Save order details, including quantity
                 new_orders.append({
                     'orderId': sell_order['orderId'],
                     'price': sell_price,
@@ -204,14 +200,19 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                 print(f"SELL Order Placed Successfully: {sell_order['orderId']}, Quantity: {order_quantity_adjusted}")
             else:
                 print(f"Error placing SELL order at {sell_price}. Unexpected API response: {sell_order}")
-                break  # Stop processing this symbol's grid due to an unexpected response
+                break
+
+        # Tallenna uudet tilaukset tiedostoon (base_spacing pysyy välimuistissa)
+        previous_orders = {
+            'orders': new_orders,
+            'limit_orders': limit_orders
+        }
+        save_open_orders_to_file(symbol, previous_orders)
 
     else:
         # Check if the order already exists
-        # Initialize limit_orders with the values from previous_orders, or use an empty dict if not available
         limit_orders = previous_orders.get('limit_orders', {}).copy()
 
-        # Correct iteration over 'orders' in the dictionary
         for previous_order in previous_orders.get('orders', []):
             matching_order = next((order for order in open_orders if order['orderId'] == previous_order['orderId']), None)
 
@@ -223,37 +224,32 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     message = f"{symbol} No open positions detected. Assuming that position is closed. Resetting grid."
                     log_and_print(message)
                     reset_grid(symbol, api_key, api_secret)
+                    # Tyhjennä välimuisti resetoinnin yhteydessä
+                    if symbol in spacing_cache:
+                        del spacing_cache[symbol]
                     return
 
                 # Order filled, calculate replacement order
                 side = previous_order['side']
                 new_side = 'SELL' if side == 'BUY' else 'BUY'
 
-                # Use position entry price as a base point
                 base_price = float(open_positions[0]['entryPrice'])
-
-                # Calculate level in the grid
                 level = round(abs(previous_order['price'] - market_price) / base_spacing)
 
-                # Calculate spacing progressively or as a fixed value
                 new_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression) if progressive_grid else base_spacing
-
-                # Determine new order price relative to position price
                 price = (
                     base_price - new_spacing if new_side == 'BUY'
                     else base_price + new_spacing
                 )
                 new_order_price = round_to_tick_size(price, tick_size)
 
-                # Ensure the price does not exceed position entry price on the wrong side
                 if new_side == 'BUY' and new_order_price > base_price:
                     new_order_price = round_to_tick_size(base_price - (0.002 * base_price), tick_size)
                 elif new_side == 'SELL' and new_order_price < base_price:
                     new_order_price = round_to_tick_size(base_price + (0.002 * base_price), tick_size)
 
-                # Prevent duplicate orders
                 if any(
-                    abs(float(order['price']) - new_order_price) <= tolerance
+                    abs(float(order['price']) - new_order_price) <= base_spacing * tolerance
                     and order['side'] == new_side
                     for order in open_orders
                 ):
@@ -261,7 +257,6 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     log_and_print(message)
                     continue
 
-                # Place new order
                 print(f"Placing new {new_side} order at {new_order_price} with quantity {previous_order['quantity']} "
                       f"to replace filled {side} order")
                 new_order = place_limit_order(
@@ -269,7 +264,6 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     'SHORT' if new_side == 'SELL' else 'LONG', working_type
                 )
 
-                # Check if the order placement was successful
                 if new_order is None:
                     print(f"Error placing new {new_side} order at {new_order_price}. Skipping to the next iteration.")
                     break
@@ -286,16 +280,13 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     print(f"Error placing new order at {new_order_price}")
                     break
 
-        # Debug
-        #print(f"Market price: {market_price}, Lowest Buy Order Price: {lowest_buy_order_price}, Highest Sell Order Price: {highest_sell_order_price}, Base spacing: {base_spacing}")
-
-    # Save updated orders and preserve original limit_orders
-    data_to_save = {
-        "orders": new_orders,
-        "limit_orders": limit_orders
-    }
-    save_open_orders_to_file(symbol, data_to_save)
-
+        # Tallenna päivitetyt tilaukset
+        previous_orders = {
+            'orders': new_orders,
+            'limit_orders': limit_orders
+        }
+        save_open_orders_to_file(symbol, previous_orders)
+        
 def handle_breakout_strategy(symbol, trigger_result, order_quantity, trailing_stop_rate, api_key, api_secret, working_type, active_breakouts):
     """
     Handle breakout strategy: open market order and set trailing stop if conditions met.
