@@ -249,7 +249,7 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
                     new_order_price = round_to_tick_size(base_price + (0.002 * base_price), tick_size)
 
                 if any(
-                    abs(float(order['price']) - new_order_price) <= base_spacing * tolerance
+                    abs(float(order['price']) - new_order_price) <= tolerance
                     and order['side'] == new_side
                     for order in open_orders
                 ):
