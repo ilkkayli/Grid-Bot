@@ -135,7 +135,7 @@ def main_loop():
     if not has_open_orders:
         print("No open orders found for any symbol. Clearing orders files...")
         for symbol in crypto_settings.keys():
-            clear_orders_file()  # Clear the orders file for each symbol
+            clear_orders_file(symbol)  # Clear the orders file for each symbol
 
     while True:
         print("Starting a new loop...")
