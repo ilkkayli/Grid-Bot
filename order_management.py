@@ -1,8 +1,8 @@
 import json
 import os
-from binance_futures import get_open_orders, get_tick_size,place_limit_order, reset_grid, get_open_positions, log_and_print, get_step_size, calculate_dynamic_base_spacing, get_market_price, open_trailing_stop_order, place_market_order
+from binance_futures import get_open_orders, get_tick_size, place_limit_order, reset_grid, get_open_positions, log_and_print, get_step_size, calculate_dynamic_base_spacing, get_market_price, open_trailing_stop_order, place_market_order, get_bollinger_bands
 from file_utils import load_json
-#from binance_websockets import get_latest_price
+# from binance_websockets import get_latest_price
 
 # Fetch settings
 secrets = load_json("secrets.json")
@@ -30,7 +30,7 @@ def save_current_orders(symbol, orders):
     with open(filename, "w") as file:
         json.dump(orders, file)
 
-def clear_orders_file(symbol):
+def clear_orders_file(symbol=None):
     """Clears the file for the specific symbol when the bot starts."""
     filename = get_orders_file(symbol)
     with open(filename, 'w') as file:
@@ -80,13 +80,11 @@ def calculate_variable_grid_spacing(level, base_spacing, grid_progression, max_s
 
 spacing_cache = {}
 
-def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, progressive_grid, grid_progression, use_websocket):
-    # Retrieve current market price
+def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, leverage, progressive_grid, grid_progression, use_websocket, klines_interval, use_bollinger_bands=True, spacing_percent=1.0):
+    # Fetch market price
     if use_websocket:
         market_price = get_latest_price(symbol)
-        print(f"WebSocket price retrieved {symbol} {market_price}")
         if market_price is None:
-            print(f"WebSocket price unavailable, fetching from API for {symbol}...")
             market_price = get_market_price(symbol, api_key, api_secret)
     else:
         market_price = get_market_price(symbol, api_key, api_secret)
@@ -95,198 +93,285 @@ def handle_grid_orders(symbol, grid_levels, order_quantity, working_type, levera
         print(f"Error: Could not retrieve market price for {symbol}.")
         return None
 
-    print(f"Market price for {symbol}: {market_price}")
+    market_price = float(market_price)
 
-    # Retrieve tick size for the trading pair
+    # Fetch tick/step size
     tick_size = get_tick_size(symbol, api_key, api_secret)
-    if tick_size is None:
-        print("Error: Could not retrieve tick size.")
-        return
-
-    # Retrieve step size for the trading pair
     step_size = get_step_size(symbol, api_key, api_secret)
-    if step_size is None:
-        print("Error: Could not retrieve step size.")
+    if not tick_size or not step_size:
+        print("Error: Could not retrieve tick/step size.")
         return
 
-    # Fetch current open orders from Binance
-    open_orders = get_open_orders(symbol, api_key, api_secret)
-    if open_orders is None:
-        message = f"{symbol} Error detected in open orders response."
-        log_and_print(message)
-        return
+    # Fetch Bollinger Bands data
+    if use_bollinger_bands:
+        bb_data = get_bollinger_bands(symbol, api_key, api_secret, klines_interval, 20)
+        if bb_data is None:
+            print(f"Error: Could not fetch Bollinger Bands for {symbol}. Using fallback bounds.")
+            upper_band = market_price * 1.05
+            lower_band = market_price * 0.95
+            bbw = None
+            sma = market_price  # Fallback value
+        else:
+            upper_band = bb_data['upper_band']
+            lower_band = bb_data['lower_band']
+            bbw = (upper_band - lower_band) / market_price
+            sma = (upper_band + lower_band) / 2  # Explicitly calculate SMA
+            # Ensure market price is within bands
+            if market_price < lower_band:
+                print(f"Warning: market_price ({market_price}) is below lower_band ({lower_band}). Adjusting lower_band.")
+                lower_band = market_price * 0.95
+            if market_price > upper_band:
+                print(f"Warning: market_price ({market_price}) is above upper_band ({upper_band}). Adjusting upper_band.")
+                upper_band = market_price * 1.05
     else:
-        print("Open orders retrieved.")
+        bbw = None
+        sma = market_price
+        upper_band = market_price * 1.05
+        lower_band = market_price * 0.95
 
-    # Load previous open orders from file
+    open_orders = get_open_orders(symbol, api_key, api_secret)
+    if isinstance(open_orders, dict) and "error" in open_orders:
+        print(f"Skipping this loop due to API error: {open_orders['error']}")
+        return
+
     previous_orders = load_open_orders_from_file(symbol)
-
     new_orders = []
     limit_orders = {}
 
-    # Retrieve or calculate base_spacing from cache
+    # Check orders in Bollinger Bands mode
+    if use_bollinger_bands and bbw is not None:
+        check_orders_within_bands(symbol, open_orders, api_key, api_secret, upper_band, lower_band)
+        # Update open_orders if a reset occurred
+        updated_orders = get_open_orders(symbol, api_key, api_secret)
+        if isinstance(updated_orders, dict) and "error" in updated_orders:
+            print(f"Skipping this loop due to API error after reset: {updated_orders['error']}")
+            return
+        open_orders = updated_orders
+
+    # Fetch or calculate base_spacing
     if symbol not in spacing_cache:
-        base_spacing = calculate_dynamic_base_spacing(symbol, api_key, api_secret)
+        if use_bollinger_bands and bbw is not None:
+            total_levels = grid_levels * 2
+            base_spacing = (upper_band - lower_band) / total_levels
+            spacing_cache[symbol] = base_spacing
+        else:
+            base_spacing = calculate_dynamic_base_spacing(symbol, api_key, api_secret)
         if base_spacing is None:
             print(f"Error: Could not calculate base spacing for {symbol}.")
             return
         spacing_cache[symbol] = base_spacing
-        print(f"Base grid spacing calculated and cached: {base_spacing}")
     else:
         base_spacing = spacing_cache[symbol]
-        print(f"Base grid spacing retrieved from cache: {base_spacing}")
 
-    # Define price tolerance (5% of base spacing, adjustable)
-    tolerance = base_spacing * 0.05
+    print(f"Debug: market_price={market_price}, sma={sma}, base_spacing={base_spacing}, tick_size={tick_size}, lower_band={lower_band}, upper_band={upper_band}, use_bollinger_bands={use_bollinger_bands}")
 
     if not open_orders:
-        # Create new grid orders
-        print(f"Grid progression: {progressive_grid}")
-        for level in range(1, grid_levels + 1):
-            if progressive_grid:
-                buy_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression)
-                sell_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression)
-                print(f"Variable Spacing for BUY: {buy_spacing}, SELL: {sell_spacing}")
-                order_quantity_adjusted = round_to_step_size(order_quantity * (grid_progression ** (level - 1)), step_size)
-                print(f"Adjusted Order Quantity: {order_quantity_adjusted}")
-            else:
-                buy_spacing = sell_spacing = base_spacing
-                order_quantity_adjusted = round_to_step_size(order_quantity, step_size)
-                print(f"Fixed Spacing: {base_spacing}")
-                print(f"Fixed Order Quantity: {order_quantity_adjusted}")
+        # Check if market price is close to SMA (only during grid creation)
+        if use_bollinger_bands and abs(market_price - sma) > base_spacing:
+            print(f"{symbol}: Market price ({market_price}) is not close to SMA ({sma}). Skipping grid setup. Distance: {abs(market_price - sma)}, Threshold: {base_spacing}")
+            return
 
-            buy_price = round_to_tick_size(market_price - (level * buy_spacing), tick_size)
-            sell_price = round_to_tick_size(market_price + (level * sell_spacing), tick_size)
+        order_quantity_adjusted = round_to_step_size(order_quantity, step_size)
 
-            print(f"Market Price: {market_price}, Buy Price: {buy_price}, Sell Price: {sell_price}")
+        if use_bollinger_bands:
+            # Start from market price
+            starting_price = round_to_tick_size(market_price, tick_size)
 
-            # Placing BUY orders
-            print(f"Placing BUY order at {buy_price}")
-            buy_order = place_limit_order(
-                symbol, 'BUY', order_quantity_adjusted, buy_price, api_key, api_secret, 'LONG', working_type
-            )
-            if buy_order is None:
-                print(f"Error placing BUY order at {buy_price}. Skipping to the next iteration.")
-                break
-            elif 'orderId' in buy_order:
-                new_orders.append({
-                    'orderId': buy_order['orderId'],
-                    'price': buy_price,
-                    'side': 'BUY',
-                    'quantity': round_to_step_size(order_quantity_adjusted, step_size)
-                })
-                limit_orders['lowest_buy_order_price'] = buy_price
-                print(f"BUY Order Placed Successfully: {buy_order['orderId']}, Quantity: {order_quantity_adjusted}")
-            else:
-                print(f"Error placing BUY order at {buy_price}. Unexpected API response: {buy_order}")
-                break
+            # Place SELL orders above
+            current_price = starting_price
+            count = 0
+            sell_orders = []
+            while count < grid_levels:  # Removed upper_band restriction
+                if current_price <= market_price:
+                    current_price = round_to_tick_size(current_price + base_spacing, tick_size)
+                    continue
+                side = 'SELL'
+                position_side = 'SHORT'
+                print(f"Checking {side} order at {current_price}, count={count}/{grid_levels}")
+                order = place_limit_order(symbol, side, order_quantity_adjusted, current_price, api_key, api_secret, position_side, working_type)
+                if order and 'orderId' in order:
+                    sell_orders.append({
+                        'orderId': order['orderId'],
+                        'price': current_price,
+                        'side': side,
+                        'quantity': order_quantity_adjusted
+                    })
+                    print(f"{side} at {current_price}")
+                    count += 1
+                else:
+                    print(f"Order failed at {current_price}, skipping this level.")
+                current_price = round_to_tick_size(current_price + base_spacing, tick_size)
 
-            # Placing SELL orders
-            print(f"Placing SELL order at {sell_price}")
-            sell_order = place_limit_order(
-                symbol, 'SELL', order_quantity_adjusted, sell_price, api_key, api_secret, 'SHORT', working_type
-            )
-            if sell_order is None:
-                print(f"Error placing SELL order at {sell_price}. Stopping grid creation for {symbol}.")
-                break
-            elif 'orderId' in sell_order:
-                new_orders.append({
-                    'orderId': sell_order['orderId'],
-                    'price': sell_price,
-                    'side': 'SELL',
-                    'quantity': round_to_step_size(order_quantity_adjusted, step_size)
-                })
-                limit_orders['highest_sell_order_price'] = sell_price
-                print(f"SELL Order Placed Successfully: {sell_order['orderId']}, Quantity: {order_quantity_adjusted}")
-            else:
-                print(f"Error placing SELL order at {sell_price}. Unexpected API response: {sell_order}")
-                break
+            # Place BUY orders below
+            current_price = starting_price
+            count = 0
+            buy_orders = []
+            while count < grid_levels:  # Removed lower_band restriction
+                if current_price >= market_price:
+                    current_price = round_to_tick_size(current_price - base_spacing, tick_size)
+                    continue
+                side = 'BUY'
+                position_side = 'LONG'
+                print(f"Checking {side} order at {current_price}, count={count}/{grid_levels}")
+                order = place_limit_order(symbol, side, order_quantity_adjusted, current_price, api_key, api_secret, position_side, working_type)
+                if order and 'orderId' in order:
+                    buy_orders.append({
+                        'orderId': order['orderId'],
+                        'price': current_price,
+                        'side': side,
+                        'quantity': order_quantity_adjusted
+                    })
+                    print(f"{side} at {current_price}")
+                    count += 1
+                else:
+                    print(f"Order failed at {current_price}, skipping this level.")
+                current_price = round_to_tick_size(current_price - base_spacing, tick_size)
 
-        # Tallenna uudet tilaukset tiedostoon (base_spacing pysyy välimuistissa)
-        previous_orders = {
-            'orders': new_orders,
-            'limit_orders': limit_orders
-        }
+            new_orders = sell_orders + buy_orders
+            print(f"Grid setup complete: {len(new_orders)} orders placed (SELL: {len(sell_orders)}, BUY: {len(buy_orders)})")
+
+        else:  # Basic bot logic
+            for level in range(1, grid_levels + 1):
+                buy_spacing = base_spacing
+                sell_spacing = base_spacing
+                buy_price = round_to_tick_size(market_price - (level * buy_spacing), tick_size)
+                sell_price = round_to_tick_size(market_price + (level * sell_spacing), tick_size)
+
+                buy_order = place_limit_order(symbol, 'BUY', order_quantity_adjusted, buy_price, api_key, api_secret, 'LONG', working_type)
+                if buy_order and 'orderId' in buy_order:
+                    new_orders.append({'orderId': buy_order['orderId'], 'price': buy_price, 'side': 'BUY', 'quantity': order_quantity_adjusted})
+                    print(f"BUY at {buy_price}")
+
+                sell_order = place_limit_order(symbol, 'SELL', order_quantity_adjusted, sell_price, api_key, api_secret, 'SHORT', working_type)
+                if sell_order and 'orderId' in sell_order:
+                    new_orders.append({'orderId': sell_order['orderId'], 'price': sell_price, 'side': 'SELL', 'quantity': order_quantity_adjusted})
+                    print(f"SELL at {sell_price}")
+
+        previous_orders = {'orders': new_orders, 'limit_orders': limit_orders}
         save_open_orders_to_file(symbol, previous_orders)
 
-    else:
-        # Check if the order already exists
+    else:  # Replacement logic
         limit_orders = previous_orders.get('limit_orders', {}).copy()
+        tolerance = 0.001 * market_price
 
         for previous_order in previous_orders.get('orders', []):
             matching_order = next((order for order in open_orders if order['orderId'] == previous_order['orderId']), None)
-
             if matching_order:
                 new_orders.append(previous_order)
             else:
                 open_positions = get_open_positions(symbol, api_key, api_secret)
+                if isinstance(open_positions, dict) and "error" in open_positions:
+                    log_and_print(f"Skipping this loop due to API error: {open_positions['error']}")
+                    return
+
                 if not open_positions:
                     message = f"{symbol} No open positions detected. Assuming that position is closed. Resetting grid."
                     log_and_print(message)
                     reset_grid(symbol, api_key, api_secret)
-                    # Tyhjennä välimuisti resetoinnin yhteydessä
                     if symbol in spacing_cache:
                         del spacing_cache[symbol]
                     return
 
-                # Order filled, calculate replacement order
                 side = previous_order['side']
                 new_side = 'SELL' if side == 'BUY' else 'BUY'
-
                 base_price = float(open_positions[0]['entryPrice'])
-                level = round(abs(previous_order['price'] - market_price) / base_spacing)
 
-                new_spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression) if progressive_grid else base_spacing
-                price = (
-                    base_price - new_spacing if new_side == 'BUY'
-                    else base_price + new_spacing
+                if use_bollinger_bands:
+                    spacing = base_spacing
+                else:
+                    level = round(abs(previous_order['price'] - market_price) / base_spacing)
+                    spacing = calculate_variable_grid_spacing(level, base_spacing, grid_progression) if progressive_grid else base_spacing
+
+                new_price = (
+                    round_to_tick_size(base_price - spacing, tick_size) if new_side == 'BUY'
+                    else round_to_tick_size(base_price + spacing, tick_size)
                 )
-                new_order_price = round_to_tick_size(price, tick_size)
 
-                if new_side == 'BUY' and new_order_price > base_price:
-                    new_order_price = round_to_tick_size(base_price - (0.002 * base_price), tick_size)
-                elif new_side == 'SELL' and new_order_price < base_price:
-                    new_order_price = round_to_tick_size(base_price + (0.002 * base_price), tick_size)
+                if use_bollinger_bands:
+                    if new_side == 'BUY' and new_price >= market_price:
+                        new_price = round_to_tick_size(base_price - (0.002 * base_price), tick_size)
+                    elif new_side == 'SELL' and new_price <= market_price:
+                        new_price = round_to_tick_size(base_price + (0.002 * base_price), tick_size)
+                else:
+                    if new_side == 'BUY' and new_price > base_price:
+                        new_price = round_to_tick_size(base_price - (0.002 * base_price), tick_size)
+                    elif new_side == 'SELL' and new_price < base_price:
+                        new_price = round_to_tick_size(base_price + (0.002 * base_price), tick_size)
 
-                if any(
-                    abs(float(order['price']) - new_order_price) <= tolerance
-                    and order['side'] == new_side
-                    for order in open_orders
-                ):
-                    message = f"{new_side} order already exists at {new_order_price} within tolerance range. Skipping order replacement."
+                if any(abs(float(order['price']) - new_price) <= tolerance and order['side'] == new_side for order in open_orders):
+                    message = f"{symbol} {new_side} order already exists at {new_price} within tolerance range. Skipping order replacement."
                     log_and_print(message)
                     continue
 
-                print(f"Placing new {new_side} order at {new_order_price} with quantity {previous_order['quantity']} "
+                print(f"Placing new {new_side} order at {new_price} with quantity {previous_order['quantity']} "
                       f"to replace filled {side} order")
                 new_order = place_limit_order(
-                    symbol, new_side, previous_order['quantity'], new_order_price, api_key, api_secret,
+                    symbol, new_side, previous_order['quantity'], new_price, api_key, api_secret,
                     'SHORT' if new_side == 'SELL' else 'LONG', working_type
                 )
 
                 if new_order is None:
-                    print(f"Error placing new {new_side} order at {new_order_price}. Skipping to the next iteration.")
-                    break
+                    print(f"Error placing new {new_side} order at {new_price}. Skipping to the next iteration.")
+                    continue
                 elif 'orderId' in new_order:
                     new_orders.append({
                         'orderId': new_order['orderId'],
-                        'price': new_order_price,
+                        'price': new_price,
                         'side': new_side,
                         'quantity': previous_order['quantity']
                     })
-                    message = f"{symbol} Placed a new replacement order {new_side} at {new_order_price}."
+                    message = f"{symbol} Placed a new replacement order {new_side} at {new_price}."
                     log_and_print(message)
                 else:
-                    print(f"Error placing new order at {new_order_price}")
-                    break
+                    print(f"Error placing new order at {new_price}")
+                    continue
 
-        # Tallenna päivitetyt tilaukset
-        previous_orders = {
-            'orders': new_orders,
-            'limit_orders': limit_orders
-        }
+        previous_orders = {'orders': new_orders, 'limit_orders': limit_orders}
         save_open_orders_to_file(symbol, previous_orders)
-        
+
+def check_orders_within_bands(symbol, open_orders, api_key, api_secret, upper_band, lower_band, tolerance=0.01):
+    """
+    Checks if open orders are within Bollinger Bands with tolerance and resets the grid if they are not (when no positions are open).
+
+    Args:
+        symbol (str): Trading pair symbol (e.g., "BTCUSDC").
+        open_orders (list): List of open orders.
+        api_key (str): API key.
+        api_secret (str): API secret.
+        upper_band (float): Upper Bollinger Band limit.
+        lower_band (float): Lower Bollinger Band limit.
+        tolerance (float): Percentage tolerance (e.g., 0.01 = 1%).
+    """
+    open_positions = get_open_positions(symbol, api_key, api_secret)
+    if open_positions and len(open_positions) > 0:
+        return  # Positions exist, no check needed
+
+    if not isinstance(open_orders, list):
+        print(f"Invalid open_orders format in check_orders_within_bands: {open_orders}")
+        return
+
+    if not open_orders:
+        return
+
+    # Calculate expanded bounds with tolerance
+    band_width = upper_band - lower_band
+    lower_bound = lower_band - (band_width * tolerance)
+    upper_bound = upper_band + (band_width * tolerance)
+
+    for order in open_orders:
+        try:
+            order_price = float(order['price'])
+            if order_price < lower_bound or order_price > upper_bound:
+                message = f"{symbol}: Order at {order_price} is outside Bollinger Bands with tolerance ({lower_bound} - {upper_bound}). Resetting grid."
+                log_and_print(message)
+                reset_grid(symbol, api_key, api_secret)
+                if symbol in spacing_cache:
+                    del spacing_cache[symbol]
+                return
+        except (KeyError, TypeError) as e:
+            print(f"Error processing order in check_orders_within_bands: {order}, Error: {e}")
+            continue
+
 def handle_breakout_strategy(symbol, trigger_result, order_quantity, trailing_stop_rate, api_key, api_secret, working_type, active_breakouts):
     """
     Handle breakout strategy: open market order and set trailing stop if conditions met.
@@ -304,7 +389,7 @@ def handle_breakout_strategy(symbol, trigger_result, order_quantity, trailing_st
     if trigger_result['strategy'] not in ['breakout_long', 'breakout_short']:
         return
 
-    # Tarkista, onko breakout aktiivinen ja positio yhä auki
+    # Check if breakout is active and position is still open
     if symbol in active_breakouts:
         open_positions = get_open_positions(symbol, api_key, api_secret)
         if not open_positions:
